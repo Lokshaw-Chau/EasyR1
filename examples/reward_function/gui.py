@@ -57,7 +57,7 @@ def extract_input_text(content):
 
 def extract_coord(content):
     # Try to find the bbox within <answer> tags, if can not find, return [0, 0, 0, 0]
-    answer_tag_pattern = r'<answer>(.*?)</answer>'
+    answer_tag_pattern = r'<tool_call>(.*?)</tool_call>'
     bbox_pattern = r'\{.*\[(\d+),\s*(\d+)]\s*.*\}'
     content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
     try:
@@ -83,47 +83,48 @@ def r1gui_format_reward(predict_str: str) -> float:
     并验证 <answer> 中的内容是否符合 [{'action': 'action', 'point': '[x,y]', 'input_text': 'no input text'}] 的格式要求。
     """
     # 检查 <think> 和 <answer> 的外部结构
-    outer_pattern = re.compile(r"<think>.*?</think>\s*<answer>.*?</answer>", re.DOTALL)
-    if not re.fullmatch(outer_pattern, predict_str):
+    outer_pattern_1 = re.compile(r"<think>.*?</think>\s*<tool_call>.*?</tool_call>", re.DOTALL)
+    outer_pattern_2 = re.compile(r"<tool_call>.*?</tool_call>", re.DOTALL)
+    if not re.fullmatch(outer_pattern_1, predict_str) and not re.fullmatch(outer_pattern_2, predict_str):
         return 0.0
 
-    # 提取 <answer> 中的内容
-    answer_match = re.search(r"<answer>(.*?)</answer>", predict_str, re.DOTALL)
-    if not answer_match:
-        return 0.0
+    # # 提取 <answer> 中的内容
+    # answer_match = re.search(r"<answer>(.*?)</answer>", predict_str, re.DOTALL)
+    # if not answer_match:
+    #     return 0.0
 
-    # 提取 <answer> 内的内容并解析为 JSON 格式
-    answer_content = answer_match.group(1).strip()
-    try:
-        actions = eval(answer_content)  # 尝试将 <answer> 的内容解析为 JSON
+    # # 提取 <answer> 内的内容并解析为 JSON 格式
+    # answer_content = answer_match.group(1).strip()
+    # try:
+    #     actions = eval(answer_content)  # 尝试将 <answer> 的内容解析为 JSON
 
-        # 验证 actions 是否为列表
-        if not isinstance(actions, list):
-            return 0.0
+    #     # 验证 actions 是否为列表
+    #     if not isinstance(actions, list):
+    #         return 0.0
 
-        # 验证每个 action 的格式
-        for action in actions:
-            if not isinstance(action, dict):
-                return 0.0
-            # 检查 action 字典是否包含所需的键
-            if "action" not in action or "point" not in action or "input_text" not in action:
-                return 0.0
-            # 验证 action 的值是否符合要求
-            if not isinstance(action["action"], str):
-                return 0.0
-            if not (isinstance(action["point"][0],int) and isinstance(action["point"][1],int)):  # 匹配形如 [x,y] 的点
-                return 0.0
-            if not isinstance(action["input_text"], str):
-                return 0.0
-            if action["action"] in ['type', 'select','open_app'] and action["input_text"] in ['no input text']:
-                return 0.0
-            if action["action"] in ['scroll'] and action["input_text"] not in ['left','right','up','down']:
-                return 0.0
+    #     # 验证每个 action 的格式
+    #     for action in actions:
+    #         if not isinstance(action, dict):
+    #             return 0.0
+    #         # 检查 action 字典是否包含所需的键
+    #         if "action" not in action or "point" not in action or "input_text" not in action:
+    #             return 0.0
+    #         # 验证 action 的值是否符合要求
+    #         if not isinstance(action["action"], str):
+    #             return 0.0
+    #         if not (isinstance(action["point"][0],int) and isinstance(action["point"][1],int)):  # 匹配形如 [x,y] 的点
+    #             return 0.0
+    #         if not isinstance(action["input_text"], str):
+    #             return 0.0
+    #         if action["action"] in ['type', 'select','open_app'] and action["input_text"] in ['no input text']:
+    #             return 0.0
+    #         if action["action"] in ['scroll'] and action["input_text"] not in ['left','right','up','down']:
+    #             return 0.0
 
         # 如果所有检查均通过，返回 1.0
-        return 1.0
-    except:
-        return 0.0
+    return 1.0
+    # except:
+    #     return 0.0
 
 def r1gui_accuracy_reward(predict_str: str, ground_truth: str) -> float:
     """
@@ -132,36 +133,34 @@ def r1gui_accuracy_reward(predict_str: str, ground_truth: str) -> float:
     try:
         # 提取 ground_truth 的动作和参数
         ground_truth=json.loads(ground_truth)
-        gt_action=ground_truth['action'].lower()
+        # gt_action=ground_truth['action'].lower()
         gt_bbox=ground_truth['gt_bbox']
-        gt_input_text=ground_truth['input_text']
-        pred_action=extract_action(predict_str).lower()
-        pred_input_text=extract_input_text(predict_str)
-        pred_bbox,_=extract_coord(predict_str)
+        # gt_input_text=ground_truth['input_text']
+        # pred_action=extract_action(predict_str).lower()
+        # pred_input_text=extract_input_text(predict_str)
+        pred_bbox , _ =extract_coord(predict_str)
         
-        if pred_action!=gt_action:
-            return 0.0
+        # if pred_action!=gt_action:
+        #     return 0.0
         
-        if gt_action in ["click"]:
-            if len(gt_bbox)==2:
-                if (pred_bbox[0]-gt_bbox[0])**2+(pred_bbox[1]-gt_bbox[1])**2<140**2:
-                    return 1.0
-                else:
-                    return 0.0
-            elif len(gt_bbox)==4:
-                if (gt_bbox[0]<pred_bbox[0]<gt_bbox[2]) and (gt_bbox[1]<pred_bbox[1]<gt_bbox[3]):
-                    return 1.0
-                else:
-                    return 0.0
-            else:
-                return 0.0
-        elif gt_action in ['type', 'select','scroll']:
-            if calculate_f1_score(pred_input_text,gt_input_text)>=0.5:
-                return 1.0
-            else:
-                return 0.0
-        else:
+        # if gt_action in ["click"]:
+        # if len(gt_bbox)==2:
+        #     if (pred_bbox[0]-gt_bbox[0])**2+(pred_bbox[1]-gt_bbox[1])**2<140**2:
+        #         return 1.0
+        #     else:
+        #         return 0.0
+        # elif len(gt_bbox)==4:
+        if (gt_bbox[0]<pred_bbox[0]<gt_bbox[2]) and (gt_bbox[1]<pred_bbox[1]<gt_bbox[3]):
             return 1.0
+        else:
+            return 0.0
+        # elif gt_action in ['type', 'select','scroll']:
+        #     if calculate_f1_score(pred_input_text,gt_input_text)>=0.5:
+        #         return 1.0
+        #     else:
+        #         return 0.0
+        # else:
+        #     return 1.0
 
     except Exception as e:
         return 0.0

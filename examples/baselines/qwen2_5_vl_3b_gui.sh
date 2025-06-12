@@ -13,7 +13,6 @@ export CUDA_VISIBLE_DEVICES=2,3,4,5
 python3 -m verl.trainer.main \
     config=examples/config.yaml \
     data.train_files=/mnt/data/share/data1/gui-r1/train.parquet \
-    data.val_files=/mnt/data/share/data1/gui-r1/test.parquet \
     worker.actor.model.model_path=${MODEL_PATH} \
     worker.rollout.tensor_parallel_size=1 \
     worker.rollout.enable_chunked_prefill=false \

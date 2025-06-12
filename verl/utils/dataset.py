@@ -29,6 +29,13 @@ from transformers import PreTrainedTokenizer, ProcessorMixin
 from ..models.transformers.qwen2_vl import get_rope_index
 from . import torch_functional as VF
 import json
+from .agent_function_call import GUIAction
+
+from qwen_agent.llm.fncall_prompts.nous_fncall_prompt import (
+    NousFnCallPrompt,
+    Message,
+    ContentItem,
+)
 
 def collate_fn(features: List[Dict[str, Any]]) -> Dict[str, Any]:
     tensors = defaultdict(list)
@@ -128,19 +135,17 @@ class RLHFDataset(Dataset):
         row_dict.pop('success_rate', None)
         row_dict.pop('scale', None)
         images=[row_dict['image']]
+        
       
-        if task_type=='high':
-            prompt_str=  (
-                f"In this UI screenshot <image>, I want you to continue executing the command '{text}', with the action history being '{history}'.\n"
-                "Please provide the action to perform (enumerate from ['complete', 'close/delete', 'press_home', 'click', 'press_back', 'type', 'select', 'scroll', 'enter']), the point where the cursor is moved to (integer) if a click is performed, and any input text required to complete the action.\n"
-                "Output the thinking process in <think> </think> tags, and the final answer in <answer> </answer> tags as follows:\n"
-                "<think> ... </think> <answer>[{'action': enum['wait', 'open_app', 'long_press', 'complete', 'close/delete', 'press_home', 'click', 'press_back', 'type', 'select', 'scroll', 'enter'], 'point': [x, y], 'input_text': 'no input text [default]'}]</answer>\n"
-                "Note:\n thinking process can be omitted with ...\n specific input text (no default) is necessary for actions enum['type', 'select', 'scroll'] \n Example:\n"
-                "[{'action': enum['complete', 'close/delete', 'press_home', 'press_back', 'enter', 'wait'], 'point': [-100, -100], 'input_text': 'no input text'}]\n"
-                "[{'action': enum['click', , 'long_press'], 'point': [123, 300], 'input_text': 'no input text'}]\n"
-                "[{'action': enum['type', 'select', 'open_app'], 'point': [-100, -100], 'input_text': 'shanghai shopping mall'}]\n"
-                "[{'action': enum['scroll'], 'point': [-100, -100], 'input_text': enum['up', 'left', 'right', 'down']}]"
-            ) # w/ think prompt
+        # if task_type=='high':
+        prompt_str=  (
+            f"<image>\nThe user query: {text}\n"
+            "Output the thinking process in <think></think> tags, and the function call in <tool_call></tool_call> tags as follows:\n"
+            "<think> ... </think> <tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
+            "or directly output the function call in <tool_call></tool_call> tags as follows:\n"
+            "<tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
+        )
+ # w/ think prompt
             #  prompt_str=  (
             #     f"You are GUI-R1, a reasoning GUI Agent Assistant. In this UI screenshot <image>, I want you to continue executing the command '{text}', with the action history being '{history}'.\n"
             #     "Please provide the action to perform (enumerate from ['complete', 'close/delete', 'press_home', 'click', 'press_back', 'type', 'select', 'scroll', 'enter']), the point where the cursor is moved to (integer) if a click is performed, and any input text required to complete the action.\n"
@@ -152,16 +157,16 @@ class RLHFDataset(Dataset):
             #     "[{'action': enum['type', 'select'], 'point': [-100, -100], 'input_text': 'shanghai shopping mall'}]\n"
             #     "[{'action': enum['scroll'], 'point': [-100, -100], 'input_text': enum['up', 'left', 'right', 'down']}]"
             # ) # w/o think prompt
-        else:
-            prompt_str=(
-                f"In this UI screenshot <image>, I want you to continue executing the command '{text}', with the action history being '{history}'.\n"
-                "Please provide the action to perform (enumerate from ['click']), the point where the cursor is moved to (integer) if a click is performed, and any input text required to complete the action.\n"
-                "Output the thinking process in <think> </think> tags, and the final answer in <answer> </answer> tags as follows:\n"
-                "<think> ... </think> <answer>[{'action': enum[ 'click'], 'point': [x, y], 'input_text': 'no input text'}]</answer>\n" \
-                "Note:\n thinking process can be omitted with ...\n"
-                "Example:\n"
-                "[{'action': enum['click'], 'point': [123, 300], 'input_text': 'no input text'}]\n"
-            ) # w/ think prompt
+            # else:
+            #     prompt_str=(
+            #         f"In this UI screenshot <image>, I want you to continue executing the command '{text}', with the action history being '{history}'.\n"
+            #         "Please provide the action to perform (enumerate from ['click']), the point where the cursor is moved to (integer) if a click is performed, and any input text required to complete the action.\n"
+            #         "Output the thinking process in <think> </think> tags, and the final answer in <answer> </answer> tags as follows:\n"
+            #         "<think> ... </think> <answer>[{'action': enum[ 'click'], 'point': [x, y], 'input_text': 'no input text'}]</answer>\n" \
+            #         "Note:\n thinking process can be omitted with ...\n"
+            #         "Example:\n"
+            #         "[{'action': enum['click'], 'point': [123, 300], 'input_text': 'no input text'}]\n"
+            #     ) # w/ think prompt
             # prompt_str=(
             #     f"You are GUI-R1, a reasoning GUI Agent Assistant. In this UI screenshot <image>, I want you to continue executing the command '{text}', with the action history being '{history}'.\n"
             #     "Please provide the action to perform (enumerate from ['click']), the point where the cursor is moved to (integer) if a click is performed, and any input text required to complete the action.\n"
@@ -170,10 +175,37 @@ class RLHFDataset(Dataset):
             #     "Example:\n"
             #     "[{'action': enum['click'], 'point': [123, 300], 'input_text': 'no input text'}]\n"
             # ) # w/o think prompt
-
-        messages = [{"role": "user", "content": prompt_str}]
+        
         images=[process_image(image, self.max_pixels, self.min_pixels) for image in images]
 
+        screenspot = GUIAction(
+            cfg={"display_width_px": images.width, "display_height_px": images.height},
+        )
+        nousFnCallPrompt = NousFnCallPrompt()
+        system_message = nousFnCallPrompt.preprocess_fncall_messages(
+            messages = [
+                Message(role="system", content=[ContentItem(text="You are a helpful assistant.")]),
+                # Message(role="user", content=[
+                #     ContentItem(text=user_query),
+                #     ContentItem(image=data_uri)
+                # ]),
+            ],
+            functions=[screenspot.function],
+            lang=None,
+        )
+        system_message = system_message[0].model_dump()
+        messages = [
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": msg["text"]} for msg in system_message["content"]
+                ],
+            },
+            {
+                "role": "user", 
+                "content": prompt_str
+            },
+        ]
         scalex,scaley=images[0].size
         gt_bbox=row_dict['gt_bbox']
         gt_bbox[0]*=scalex
@@ -182,7 +214,8 @@ class RLHFDataset(Dataset):
             gt_bbox[2]*=scalex
             gt_bbox[3]*=scaley
 
-        gt={'action': row_dict['gt_action'],'gt_bbox': gt_bbox,'input_text': row_dict['gt_input_text']}
+        # gt={'action': row_dict['gt_action'],'gt_bbox': gt_bbox,'input_text': row_dict['gt_input_text']}
+        gt={'gt_bbox': gt_bbox}
         # if self.system_prompt:
         #     messages.insert(0, {"role": "system", "content": self.system_prompt})
 
