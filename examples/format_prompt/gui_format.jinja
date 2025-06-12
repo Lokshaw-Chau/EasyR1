@@ -1,0 +1,12 @@
+<image>
+In this UI screenshot, I want to perform the command '{{ prompt }}'.
+Please provide the action to perform (enumerate from ['wait', 'long_press', 'click', 'navigate_back', 'type', 'open_app', 'scroll']), the coordinate where the cursor is moved to (integer) if a click is performed, and any input text required to complete the action.
+Output the thinking process in <think> </think> tags, and the final answer in <answer> </answer> tags as follows:
+<think> ... </think> <answer>[{'action': enum['wait', 'long_press', 'click', 'navigate_back', 'type', 'open_app', 'scroll'], 'coordinate': [x, y], 'input_text': 'no input text [default]'}]</answer>
+Note:
+ specific input text (no default) is necessary for actions enum['type', 'open_app', 'scroll'] 
+ Example:
+[{'action': enum['wait', 'navigate_back'], 'coordinate': [-100, -100], 'input_text': 'no input text'}]
+[{'action': enum['click', 'long_press'], 'coordinate': [123, 300], 'input_text': 'no input text'}]
+[{'action': enum['type', 'open_app'], 'coordinate': [-100, -100], 'input_text': 'shanghai shopping mall'}]
+[{'action': enum['scroll'], 'coordinate': [-100, -100], 'input_text': enum['up', 'left', 'right', 'down']}]

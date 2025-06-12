@@ -6,8 +6,8 @@ data:
   image_key: images
   max_prompt_length: 2048
   max_response_length: 2048
-  rollout_batch_size: 512
-  val_batch_size: 1024
+  rollout_batch_size: 128
+  val_batch_size: 128
   format_prompt: ./examples/format_prompt/math_format.jinja
   override_chat_template: null
   shuffle: true
@@ -82,11 +82,11 @@ trainer:
   logger: ["console", "wandb"]
   nnodes: 1
   n_gpus_per_node: 8
-  val_freq: 5  # -1 to disable
-  val_before_train: true
+  val_freq: -1  # -1 to disable
+  val_before_train: false
   val_only: false
   val_generations_to_log: 3
-  save_freq: 5  # -1 to disable
+  save_freq: 50  # -1 to disable
   save_limit: 3  # -1 to disable
-  save_checkpoint_path: null
+  save_checkpoint_path: /mnt/data/share/data2/zoulexiao/qwen2_5_vl_3b_guir1_ton
   load_checkpoint_path: null

@@ -21,7 +21,6 @@ from typing import Any, Dict, List, Optional, Union
 import numpy as np
 import torch
 from datasets import load_dataset
-from jinja2 import Template
 from PIL import Image
 from PIL.Image import Image as ImageObject
 from torch.utils.data import Dataset
@@ -29,7 +28,7 @@ from transformers import PreTrainedTokenizer, ProcessorMixin
 
 from ..models.transformers.qwen2_vl import get_rope_index
 from . import torch_functional as VF
-
+import json
 
 def collate_fn(features: List[Dict[str, Any]]) -> Dict[str, Any]:
     tensors = defaultdict(list)
@@ -50,33 +49,28 @@ def collate_fn(features: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {**tensors, **non_tensors}
 
 
-class ImageProcessMixin:
-    max_pixels: int
-    min_pixels: int
+def process_image(image: Union[Dict[str, Any], ImageObject], max_pixels: int, min_pixels: int) -> ImageObject:
+    if isinstance(image, dict):
+        image = Image.open(BytesIO(image["bytes"]))
+    if isinstance(image, str):
+        image = Image.open(image)
+    if (image.width * image.height) > max_pixels:
+        resize_factor = math.sqrt(max_pixels / (image.width * image.height))
+        width, height = int(image.width * resize_factor), int(image.height * resize_factor)
+        image = image.resize((width, height))
 
-    def process_image(self, image: Union[Dict[str, Any], ImageObject]) -> ImageObject:
-        if isinstance(image, dict):
-            image = Image.open(BytesIO(image["bytes"]))
-        elif isinstance(image, bytes):
-            image = Image.open(BytesIO(image))
+    if (image.width * image.height) < min_pixels:
+        resize_factor = math.sqrt(min_pixels / (image.width * image.height))
+        width, height = int(image.width * resize_factor), int(image.height * resize_factor)
+        image = image.resize((width, height))
 
-        if (image.width * image.height) > self.max_pixels:
-            resize_factor = math.sqrt(self.max_pixels / (image.width * image.height))
-            width, height = int(image.width * resize_factor), int(image.height * resize_factor)
-            image = image.resize((width, height))
+    if image.mode != "RGB":
+        image = image.convert("RGB")
 
-        if (image.width * image.height) < self.min_pixels:
-            resize_factor = math.sqrt(self.min_pixels / (image.width * image.height))
-            width, height = int(image.width * resize_factor), int(image.height * resize_factor)
-            image = image.resize((width, height))
-
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-
-        return image
+    return image
 
 
-class RLHFDataset(Dataset, ImageProcessMixin):
+class RLHFDataset(Dataset):
     """
     We assume the dataset contains a column that contains prompts and other information
     """
@@ -103,90 +97,117 @@ class RLHFDataset(Dataset, ImageProcessMixin):
         self.image_key = image_key
         self.max_prompt_length = max_prompt_length
         self.truncation = truncation
+        # self.system_prompt = system_prompt
         self.max_pixels = max_pixels
         self.min_pixels = min_pixels
-        self.filter_overlong_prompts = filter_overlong_prompts
 
         if "@" in data_path:
             data_path, data_split = data_path.split("@")
         else:
             data_split = "train"
+            # print(data_path)
 
         if os.path.isdir(data_path):
-            # when we use dataset builder, we should always refer to the train split
             self.dataset = load_dataset("parquet", data_dir=data_path, split="train")
         elif os.path.isfile(data_path):
             self.dataset = load_dataset("parquet", data_files=data_path, split="train")
-        else:
-            # load remote dataset from huggingface hub
+        else:  # remote dataset
             self.dataset = load_dataset(data_path, split=data_split)
-
-        self.format_prompt = None
-        if format_prompt:
-            with open(format_prompt, encoding="utf-8") as f:
-                self.format_prompt = f.read()
-
-        if self.filter_overlong_prompts:
-            self.dataset = self.dataset.filter(self._filter_overlong_prompts, desc="Filtering overlong prompts")
-
-    def _build_messages(self, example: Dict[str, Any]) -> List[Dict[str, Any]]:
-        prompt_str: str = example[self.prompt_key]
-        if self.format_prompt:
-            format_prompt = Template(self.format_prompt.strip())
-            prompt_str = format_prompt.render(content=prompt_str)
-
-        if self.image_key in example:
-            # https://huggingface.co/docs/transformers/en/tasks/image_text_to_text
-            content_list = []
-            for i, content in enumerate(prompt_str.split("<image>")):
-                if i != 0:
-                    content_list.append({"type": "image"})
-
-                if content:
-                    content_list.append({"type": "text", "text": content})
-
-            return [{"role": "user", "content": content_list}]
-        else:
-            return [{"role": "user", "content": prompt_str}]
-
-    def _filter_overlong_prompts(self, example: Dict[str, Any]) -> bool:
-        messages = self._build_messages(example)
-        processing_class = self.processor if self.processor is not None else self.tokenizer
-        return (
-            len(processing_class.apply_chat_template(messages, add_generation_prompt=True)) <= self.max_prompt_length
-        )
 
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, index):
-        example: dict = self.dataset[index]
-        messages = self._build_messages(example)
+        row_dict: dict = self.dataset[index]
 
-        if self.image_key in example:
-            prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
-            images = [self.process_image(image) for image in example.pop(self.image_key)]
-            model_inputs = self.processor(images, [prompt], add_special_tokens=False, return_tensors="pt")
-            input_ids = model_inputs.pop("input_ids")[0]
-            attention_mask = model_inputs.pop("attention_mask")[0]
-            example["multi_modal_data"] = {"image": images}
-            example["multi_modal_inputs"] = dict(model_inputs)
+        # prompt_str: str = row_dict[self.prompt_key]
+        text=row_dict['instruction']
+        # history=row_dict['history']
+        # task_type=row_dict['task_type']
+        row_dict.pop('verify_bbox', None)
+        row_dict.pop('success_rate', None)
+        row_dict.pop('scale', None)
+        images=[row_dict['image']]
+      
+        if task_type=='high':
+            prompt_str=  (
+                f"In this UI screenshot <image>, I want you to continue executing the command '{text}', with the action history being '{history}'.\n"
+                "Please provide the action to perform (enumerate from ['complete', 'close/delete', 'press_home', 'click', 'press_back', 'type', 'select', 'scroll', 'enter']), the point where the cursor is moved to (integer) if a click is performed, and any input text required to complete the action.\n"
+                "Output the thinking process in <think> </think> tags, and the final answer in <answer> </answer> tags as follows:\n"
+                "<think> ... </think> <answer>[{'action': enum['wait', 'open_app', 'long_press', 'complete', 'close/delete', 'press_home', 'click', 'press_back', 'type', 'select', 'scroll', 'enter'], 'point': [x, y], 'input_text': 'no input text [default]'}]</answer>\n"
+                "Note:\n thinking process can be omitted with ...\n specific input text (no default) is necessary for actions enum['type', 'select', 'scroll'] \n Example:\n"
+                "[{'action': enum['complete', 'close/delete', 'press_home', 'press_back', 'enter', 'wait'], 'point': [-100, -100], 'input_text': 'no input text'}]\n"
+                "[{'action': enum['click', , 'long_press'], 'point': [123, 300], 'input_text': 'no input text'}]\n"
+                "[{'action': enum['type', 'select', 'open_app'], 'point': [-100, -100], 'input_text': 'shanghai shopping mall'}]\n"
+                "[{'action': enum['scroll'], 'point': [-100, -100], 'input_text': enum['up', 'left', 'right', 'down']}]"
+            ) # w/ think prompt
+            #  prompt_str=  (
+            #     f"You are GUI-R1, a reasoning GUI Agent Assistant. In this UI screenshot <image>, I want you to continue executing the command '{text}', with the action history being '{history}'.\n"
+            #     "Please provide the action to perform (enumerate from ['complete', 'close/delete', 'press_home', 'click', 'press_back', 'type', 'select', 'scroll', 'enter']), the point where the cursor is moved to (integer) if a click is performed, and any input text required to complete the action.\n"
+            #     "Output the final answer in <answer> </answer> tags as follows:\n"
+            #     "<answer>[{'action': enum['complete', 'close/delete', 'press_home', 'click', 'press_back', 'type', 'select', 'scroll', 'enter'], 'point': [x, y], 'input_text': 'no input text [default]'}]</answer>\n"
+            #     "Note:\n specific input text (no default) is necessary for actions enum['type', 'select', 'scroll'] \n Example:\n"
+            #     "[{'action': enum['complete', 'close/delete', 'press_home', 'press_back', 'enter'], 'point': [-100, -100], 'input_text': 'no input text'}]\n"
+            #     "[{'action': enum['click'], 'point': [123, 300], 'input_text': 'no input text'}]\n"
+            #     "[{'action': enum['type', 'select'], 'point': [-100, -100], 'input_text': 'shanghai shopping mall'}]\n"
+            #     "[{'action': enum['scroll'], 'point': [-100, -100], 'input_text': enum['up', 'left', 'right', 'down']}]"
+            # ) # w/o think prompt
         else:
-            prompt = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
-            model_inputs = self.tokenizer([prompt], add_special_tokens=False, return_tensors="pt")
-            input_ids = model_inputs.pop("input_ids")[0]
-            attention_mask = model_inputs.pop("attention_mask")[0]
+            prompt_str=(
+                f"In this UI screenshot <image>, I want you to continue executing the command '{text}', with the action history being '{history}'.\n"
+                "Please provide the action to perform (enumerate from ['click']), the point where the cursor is moved to (integer) if a click is performed, and any input text required to complete the action.\n"
+                "Output the thinking process in <think> </think> tags, and the final answer in <answer> </answer> tags as follows:\n"
+                "<think> ... </think> <answer>[{'action': enum[ 'click'], 'point': [x, y], 'input_text': 'no input text'}]</answer>\n" \
+                "Note:\n thinking process can be omitted with ...\n"
+                "Example:\n"
+                "[{'action': enum['click'], 'point': [123, 300], 'input_text': 'no input text'}]\n"
+            ) # w/ think prompt
+            # prompt_str=(
+            #     f"You are GUI-R1, a reasoning GUI Agent Assistant. In this UI screenshot <image>, I want you to continue executing the command '{text}', with the action history being '{history}'.\n"
+            #     "Please provide the action to perform (enumerate from ['click']), the point where the cursor is moved to (integer) if a click is performed, and any input text required to complete the action.\n"
+            #     "Output the final answer in <answer> </answer> tags as follows:\n"
+            #     "<answer>[{'action': enum[ 'click'], 'point': [x, y], 'input_text': 'no input text'}]</answer>\n"
+            #     "Example:\n"
+            #     "[{'action': enum['click'], 'point': [123, 300], 'input_text': 'no input text'}]\n"
+            # ) # w/o think prompt
 
-        if self.processor is not None and self.processor.image_processor.__class__.__name__ == "Qwen2VLImageProcessor":
-            # qwen2vl mrope
-            position_ids = get_rope_index(
-                self.processor,
-                input_ids=input_ids,
-                image_grid_thw=model_inputs.get("image_grid_thw"),
-                attention_mask=attention_mask,
-            )  # (3, seq_length)
-        else:
-            position_ids = torch.clip(attention_mask.cumsum(dim=0) - 1, min=0, max=None)  # (seq_length,)
+        messages = [{"role": "user", "content": prompt_str}]
+        images=[process_image(image, self.max_pixels, self.min_pixels) for image in images]
+
+        scalex,scaley=images[0].size
+        gt_bbox=row_dict['gt_bbox']
+        gt_bbox[0]*=scalex
+        gt_bbox[1]*=scaley
+        if len(gt_bbox)>2:
+            gt_bbox[2]*=scalex
+            gt_bbox[3]*=scaley
+
+        gt={'action': row_dict['gt_action'],'gt_bbox': gt_bbox,'input_text': row_dict['gt_input_text']}
+        # if self.system_prompt:
+        #     messages.insert(0, {"role": "system", "content": self.system_prompt})
+
+        prompt = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+
+        # if self.image_key in row_dict:
+        prompt = prompt.replace("<image>", "<|vision_start|><|image_pad|><|vision_end|>")
+        row_dict["multi_modal_data"] = {
+            "image": images
+        }
+        model_inputs = self.processor(row_dict["multi_modal_data"]["image"], prompt, return_tensors="pt")
+        input_ids = model_inputs.pop("input_ids")[0]
+        attention_mask = model_inputs.pop("attention_mask")[0]
+        row_dict["multi_modal_inputs"] = dict(model_inputs)
+        position_ids = get_rope_index(
+            self.processor,
+            input_ids=input_ids,
+            image_grid_thw=model_inputs["image_grid_thw"],
+            attention_mask=attention_mask,
+        )  # (3, seq_length)
+        # else:
+        #     model_inputs = self.tokenizer([prompt], add_special_tokens=False, return_tensors="pt")
+        #     input_ids = model_inputs.pop("input_ids")[0]
+        #     attention_mask = model_inputs.pop("attention_mask")[0]
+        #     position_ids = torch.clip(attention_mask.cumsum(dim=0) - 1, min=0, max=None)  # (seq_length,)
 
         input_ids, attention_mask, position_ids = VF.postprocess_data(
             input_ids=input_ids,
@@ -197,18 +218,9 @@ class RLHFDataset(Dataset, ImageProcessMixin):
             left_pad=True,
             truncation=self.truncation,
         )
-        raw_prompt_ids = self.tokenizer.encode(prompt, add_special_tokens=False)
-        if len(raw_prompt_ids) > self.max_prompt_length:
-            if self.truncation == "left":
-                raw_prompt_ids = raw_prompt_ids[-self.max_prompt_length :]
-            elif self.truncation == "right":
-                raw_prompt_ids = raw_prompt_ids[: self.max_prompt_length]
-            elif self.truncation == "error":
-                raise RuntimeError(f"Prompt length {len(raw_prompt_ids)} is longer than {self.max_prompt_length}.")
-
-        example["input_ids"] = input_ids
-        example["attention_mask"] = attention_mask
-        example["position_ids"] = position_ids
-        example["raw_prompt_ids"] = raw_prompt_ids
-        example["ground_truth"] = example.pop(self.answer_key)
-        return example
+        row_dict["input_ids"] = input_ids
+        row_dict["attention_mask"] = attention_mask
+        row_dict["position_ids"] = position_ids
+        row_dict["raw_prompt_ids"] = self.tokenizer.encode(prompt, add_special_tokens=False)
+        row_dict["ground_truth"] = json.dumps(gt)
+        return row_dict
