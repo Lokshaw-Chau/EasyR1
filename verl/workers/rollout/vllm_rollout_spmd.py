@@ -131,6 +131,9 @@ class vLLMRollout(BaseRollout):
         non_tensor_batch = prompts.non_tensor_batch
         if batch_size != len(non_tensor_batch["raw_prompt_ids"]):
             raise RuntimeError("vllm sharding manager is not work properly.")
+        
+        think_token_ids = self.tokenizer.encode("<think>", add_special_tokens=False)
+        tool_call_token_ids = self.tokenizer.encode("<tool_call>", add_special_tokens=False)
 
         if "multi_modal_data" in non_tensor_batch:
             vllm_inputs = []
@@ -145,13 +148,44 @@ class vLLMRollout(BaseRollout):
 
         # users can customize different sampling_params at different run
         with self.update_sampling_params(**prompts.meta_info):
-            completions: List[RequestOutput] = self.inference_engine.generate(
-                prompts=vllm_inputs, sampling_params=self.sampling_params, use_tqdm=(self.rank == 0)
-            )
-            response_ids = [output.token_ids for completion in completions for output in completion.outputs]
+            original_sampling_n = self.sampling_params.n
+            self.sampling_params.n = 1
+            i=0
+            response_ids = []
+            for vllm_input in vllm_inputs:
+                if i % original_sampling_n < original_sampling_n // 2:
+                    vllm_input["prompt_token_ids"] = vllm_input["prompt_token_ids"] + think_token_ids
+                else:
+                    vllm_input["prompt_token_ids"] = vllm_input["prompt_token_ids"] + tool_call_token_ids
+            
+                completions: List[RequestOutput] = self.inference_engine.generate(
+                    prompts=vllm_inputs, sampling_params=self.sampling_params, use_tqdm=(self.rank == 0)
+                )
+                
+                if i % original_sampling_n < original_sampling_n // 2:
+                    response_ids.append(think_token_ids + completions[0].outputs[0].token_ids)
+                else:
+                    response_ids.append(tool_call_token_ids + completions[0].outputs[0].token_ids)
+                i += 1
+            # response_ids = [output.token_ids for completion in completions for output in completion.outputs]
             response_ids = VF.pad_2d_list_to_length(
                 response_ids, self.pad_token_id, max_length=self.config.response_length
             ).to(input_ids.device)
+
+        # Restore original n
+            self.sampling_params.n = original_sampling_n
+            # Create special token masks for loss weighting
+            # mode_token_mask = torch.zeros_like(response_ids, dtype=torch.bool)
+            
+            # # Mark positions of special tokens in response
+            # for i in range(response_ids.size(0)):
+            #     sample_idx = i % original_sampling_n
+            #     if sample_idx < original_sampling_n // 2:
+            #         # This sample starts with <think>
+            #         mode_token_mask[i,:3] = True
+            #     else:
+            #         # This sample starts with <tool_call>
+            #         mode_token_mask[i,0] = True
 
             if self.sampling_params.n > 1:
                 batch_size = batch_size * self.sampling_params.n
@@ -184,6 +218,7 @@ class vLLMRollout(BaseRollout):
                 "input_ids": sequence_ids,  # here input_ids become the whole sentences
                 "attention_mask": attention_mask,
                 "response_mask": response_mask,
+                # 'mode_token_mask': mode_token_mask,
                 "position_ids": position_ids,
             },
             batch_size=batch_size,
