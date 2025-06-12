@@ -359,7 +359,7 @@ def compute_policy_loss(
         cond_loss = VF.masked_mean(final_pg_loss, cond_mask)
         resp_loss = VF.masked_mean(final_pg_loss, resp_mask)
 
-        pg_loss = thinkless_alpha * cond_loss + resp_loss
+        final_pg_loss = thinkless_alpha * cond_loss + resp_loss
     else: 
         final_pg_loss = VF.masked_mean(final_pg_loss, response_mask)
     pg_clipfrac_higher = VF.masked_mean(pg_clipfrac_higher, response_mask)

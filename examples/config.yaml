@@ -88,5 +88,5 @@ trainer:
   val_generations_to_log: 3
   save_freq: 50  # -1 to disable
   save_limit: 3  # -1 to disable
-  save_checkpoint_path: /mnt/data/share/data2/zoulexiao/qwen2_5_vl_3b_guir1_ton
+  save_checkpoint_path: /mnt/data/share/data2/zoulexiao/qwen2_5_vl_3b_guir1_exp2
   load_checkpoint_path: null

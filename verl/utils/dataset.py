@@ -179,7 +179,7 @@ class RLHFDataset(Dataset):
         images=[process_image(image, self.max_pixels, self.min_pixels) for image in images]
 
         screenspot = GUIAction(
-            cfg={"display_width_px": images.width, "display_height_px": images.height},
+            cfg={"display_width_px": images[0].width, "display_height_px": images[0].height},
         )
         nousFnCallPrompt = NousFnCallPrompt()
         system_message = nousFnCallPrompt.preprocess_fncall_messages(
@@ -194,12 +194,12 @@ class RLHFDataset(Dataset):
             lang=None,
         )
         system_message = system_message[0].model_dump()
+        syttem_message = [text['text'] for text in system_message['content']]
+        system_message = ' '.join(syttem_message)
         messages = [
             {
                 "role": "system",
-                "content": [
-                    {"type": "text", "text": msg["text"]} for msg in system_message["content"]
-                ],
+                "content": system_message,
             },
             {
                 "role": "user", 

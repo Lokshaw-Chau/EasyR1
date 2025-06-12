@@ -132,15 +132,17 @@ class vLLMRollout(BaseRollout):
         if batch_size != len(non_tensor_batch["raw_prompt_ids"]):
             raise RuntimeError("vllm sharding manager is not work properly.")
         
-        think_token_ids = self.tokenizer.encode("<think>", add_special_tokens=False)
-        tool_call_token_ids = self.tokenizer.encode("<tool_call>", add_special_tokens=False)
+        think_token_ids = [13708, 766, 29]
+        tool_call_token_ids = [151657]
 
         if "multi_modal_data" in non_tensor_batch:
             vllm_inputs = []
             for raw_prompt_ids, multi_modal_data in zip(
                 non_tensor_batch.pop("raw_prompt_ids"), non_tensor_batch.pop("multi_modal_data")
             ):
-                vllm_inputs.append({"prompt_token_ids": list(raw_prompt_ids), "multi_modal_data": multi_modal_data})
+                for i in range(self.sampling_params.n):
+                    vllm_inputs.append({"prompt_token_ids": list(raw_prompt_ids), "multi_modal_data": multi_modal_data})
+
         else:
             vllm_inputs = [
                 {"prompt_token_ids": list(raw_prompt_ids)} for raw_prompt_ids in non_tensor_batch.pop("raw_prompt_ids")
@@ -158,21 +160,21 @@ class vLLMRollout(BaseRollout):
                 else:
                     vllm_input["prompt_token_ids"] = vllm_input["prompt_token_ids"] + tool_call_token_ids
             
-                completions: List[RequestOutput] = self.inference_engine.generate(
-                    prompts=vllm_inputs, sampling_params=self.sampling_params, use_tqdm=(self.rank == 0)
-                )
-                
+            completions: List[RequestOutput] = self.inference_engine.generate(
+                prompts=vllm_inputs, sampling_params=self.sampling_params, use_tqdm=(self.rank == 0)
+            )
+            for i in range(len(completions)):
                 if i % original_sampling_n < original_sampling_n // 2:
-                    response_ids.append(think_token_ids + completions[0].outputs[0].token_ids)
+                    response_ids.append(think_token_ids + completions[i].outputs[0].token_ids)
                 else:
-                    response_ids.append(tool_call_token_ids + completions[0].outputs[0].token_ids)
-                i += 1
+                    response_ids.append(tool_call_token_ids + completions[i].outputs[0].token_ids)
+            # i += 1
             # response_ids = [output.token_ids for completion in completions for output in completion.outputs]
             response_ids = VF.pad_2d_list_to_length(
                 response_ids, self.pad_token_id, max_length=self.config.response_length
             ).to(input_ids.device)
 
-        # Restore original n
+            # Restore original n
             self.sampling_params.n = original_sampling_n
             # Create special token masks for loss weighting
             # mode_token_mask = torch.zeros_like(response_ids, dtype=torch.bool)
