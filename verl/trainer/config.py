@@ -42,7 +42,7 @@ class DataConfig:
     max_response_length: int = 512
     rollout_batch_size: int = 512
     val_batch_size: int = -1
-    format_prompt: Optional[str] = None
+    format_prompt: Optional[str] = None # "think", "no_think", "adaptive"
     override_chat_template: Optional[str] = None
     shuffle: bool = True
     seed: int = 1
@@ -50,12 +50,12 @@ class DataConfig:
     min_pixels: int = 262144
     filter_overlong_prompts: bool = True
 
-    def post_init(self):
-        if self.format_prompt is not None:
-            if os.path.exists(self.format_prompt):  # ray job uses absolute path
-                self.format_prompt = os.path.abspath(self.format_prompt)
-            else:
-                self.format_prompt = None
+    # def post_init(self):
+    #     if self.format_prompt is not None:
+    #         if os.path.exists(self.format_prompt):  # ray job uses absolute path
+    #             self.format_prompt = os.path.abspath(self.format_prompt)
+    #         else:
+    #             self.format_prompt = None
 
 
 @dataclass
@@ -70,6 +70,7 @@ class AlgorithmConfig:
     kl_type: str = "fixed"
     kl_horizon: float = 0.0
     kl_target: float = 0.0
+    think_alpha: float = 0.0
 
 
 @dataclass
@@ -115,6 +116,7 @@ class PPOConfig:
         self.worker.actor.use_kl_loss = self.algorithm.use_kl_loss
         self.worker.actor.kl_penalty = self.algorithm.kl_penalty
         self.worker.actor.kl_coef = self.algorithm.kl_coef
+        self.worker.actor.think_alpha = self.algorithm.think_alpha
 
     def deep_post_init(self):
         recursive_post_init(self)

@@ -45,16 +45,16 @@ MICRO_BATCH = 6
 
 def extract_coord(content):
     # Try to find the bbox within <answer> tags, if can not find, return [0, 0, 0, 0]
-    answer_tag_pattern = r'<tool_call>(.*?)</tool_call>'
+    # answer_tag_pattern = r'<tool_call>(.*?)</tool_call>'
     bbox_pattern = r'\{.*\[(\d+),\s*(\d+)]\s*.*\}'
-    content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
+    # content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
     try:
-        if content_answer_match:
-            content_answer = content_answer_match.group(1).strip()
-            coord_match = re.search(bbox_pattern, content_answer)
-            if coord_match:
-                coord = [int(coord_match.group(1)), int(coord_match.group(2))]
-                return coord, True
+    #     if content_answer_match:
+        # content_answer = content_answer_match.group(1).strip()
+        coord_match = re.search(bbox_pattern, content)
+        if coord_match:
+            coord = [int(coord_match.group(1)), int(coord_match.group(2))]
+            return coord, True
         else:
             coord_pattern = r'\{.*\((\d+),\s*(\d+))\s*.*\}'
             coord_match = re.search(coord_pattern, content)
@@ -66,10 +66,11 @@ def extract_coord(content):
         return [0, 0, 0, 0], False
     
 class MultiModalDataset(Dataset):
-    def __init__(self, data, processor):
+    def __init__(self, data, processor, prefix=None):
         self.data = data
         self.processor = processor
-        self.processor.max_pixels=2097152
+        self.processor.max_pixels=1258291
+        self.prefix = prefix if prefix else ""
 
     def __len__(self):
         return len(self.data)
@@ -144,7 +145,7 @@ class MultiModalDataset(Dataset):
             tokenize=False,
             add_generation_prompt=True,
         )
-
+        prompt += self.prefix
         # prompt.replace("<|vision_start|><|image_pad|><|vision_end|>","")
         # prompt.replace("<image>","<|vision_start|><|image_pad|><|vision_end|>")
 
@@ -234,7 +235,7 @@ class Worker:
             # 保存结果
             for original_sample, output in zip(original_samples, outputs):
                 generated_text = output.outputs[0].text
-                gt_bbox = original_sample["gt_bbox"]
+                # gt_bbox = original_sample["gt_bbox"]
                 original_sample["pred"] = generated_text
                 pred_coord, _ = extract_coord(generated_text)
                 original_sample["pred_coord"] = [pred_coord[0]*original_sample["scale"][0],pred_coord[1]*original_sample["scale"][1]]
@@ -257,7 +258,8 @@ def main(args):
     OUTPUT_DIR = args.output_path
     num_actors = args.num_actor
     OUTPUT_DIR = os.path.join(OUTPUT_DIR,MODEL_PATH.split('/')[-1])
-    NEW_FILE = os.path.join(OUTPUT_DIR, DATA_PATH.split("/")[-1].replace(".jsonl", "_pred.jsonl").replace('.parquet','.json'))
+    NEW_FILE = os.path.join(OUTPUT_DIR, DATA_PATH.split("/")[-1].replace(".jsonl", "_pred.jsonl").replace('.parquet',f'_{args.prefix}.json'))
+    print(NEW_FILE)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     data_chunks = [hf_dataset.from_dict(data[i::num_actors]) for i in range(num_actors)]
 
@@ -273,7 +275,7 @@ def main(args):
     # 使用 PyTorch Dataset 和 DataLoader
     futures = []
     for i, chunk in enumerate(data_chunks):
-        dataset = MultiModalDataset(chunk, processor)
+        dataset = MultiModalDataset(chunk, processor, args.prefix)
         dataloader = DataLoader(dataset, batch_size=MICRO_BATCH, shuffle=False, num_workers=16, collate_fn=custom_collate_fn)
         futures.append(workers[i].process_data.remote(dataloader))
 
@@ -293,5 +295,6 @@ if __name__ == "__main__":
     parser.add_argument('--data_path', type=str, default="<data_path>")
     parser.add_argument('--output_path', type=str, default='./outputs')
     parser.add_argument('--num_actor', type=int, default=8)
+    parser.add_argument('--prefix', type=str, default=None)
     args = parser.parse_args()
     main(args)

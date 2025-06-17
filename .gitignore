@@ -54,7 +54,7 @@ cover/
 # Translations
 *.mo
 *.pot
-
+*.whl
 # Django stuff:
 *.log
 local_settings.py
@@ -174,3 +174,4 @@ cython_debug/
 outputs/
 checkpoints/
 wandb/
+ckpts/

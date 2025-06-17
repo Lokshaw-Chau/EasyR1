@@ -296,7 +296,7 @@ def compute_policy_loss(
     clip_ratio_low: float,
     clip_ratio_high: float,
     clip_ratio_dual: float,
-    thinkless_alpha=0.001
+    thinkless_alpha: float,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Compute the policy loss.
 
@@ -347,8 +347,9 @@ def compute_policy_loss(
     final_pg_loss = torch.where(advantages < 0, clipped_pg_loss_lower, clipped_pg_loss_higher)
     pg_clipfrac_lower = (clipped_pg_loss_higher > pg_loss3).float() * (advantages < 0).float()
 
-    if thinkless_alpha is not None: # Decoupled GRPO
+    if thinkless_alpha >= 0: # Decoupled GRPO
         # Masks
+        print("Decoupled GRPO")
         cond_mask = response_mask.clone()
         cond_mask[:, 1:] = 0                    # only t = 0, the control token
         resp_mask = response_mask.clone()

@@ -29,6 +29,7 @@ from ...utils.tokenizer import get_processor
 from ...utils.torch_dtypes import PrecisionType
 from .base import BaseRollout
 from .config import RolloutConfig
+from copy import deepcopy
 
 
 def _repeat_interleave(value: Union[torch.Tensor, np.ndarray], repeats: int) -> Union[torch.Tensor, List[Any]]:
@@ -131,27 +132,65 @@ class vLLMRollout(BaseRollout):
         non_tensor_batch = prompts.non_tensor_batch
         if batch_size != len(non_tensor_batch["raw_prompt_ids"]):
             raise RuntimeError("vllm sharding manager is not work properly.")
+        
+        think_token_ids = [13708, 766, 29]
+        tool_call_token_ids = [151657]
 
         if "multi_modal_data" in non_tensor_batch:
             vllm_inputs = []
             for raw_prompt_ids, multi_modal_data in zip(
                 non_tensor_batch.pop("raw_prompt_ids"), non_tensor_batch.pop("multi_modal_data")
             ):
-                vllm_inputs.append({"prompt_token_ids": list(raw_prompt_ids), "multi_modal_data": multi_modal_data})
+                for i in range(self.sampling_params.n):
+                    vllm_inputs.append({"prompt_token_ids": list(raw_prompt_ids), "multi_modal_data": multi_modal_data})
+
         else:
             vllm_inputs = [
                 {"prompt_token_ids": list(raw_prompt_ids)} for raw_prompt_ids in non_tensor_batch.pop("raw_prompt_ids")
             ]
-        # print(f"vLLM inputs: {vllm_inputs}.")
+
         # users can customize different sampling_params at different run
         with self.update_sampling_params(**prompts.meta_info):
+            # original_sampling_n = self.sampling_params.n
+            temp_sampling_params = deepcopy(self.sampling_params)
+
+            # self.sampling_params.n = 1
+            response_ids = []
+            for vllm_input in vllm_inputs:
+                if i % self.sampling_params.n < self.sampling_params.n // 2:
+                    vllm_input["prompt_token_ids"] = vllm_input["prompt_token_ids"] + think_token_ids
+                    temp_sampling_params.max_tokens = self.sampling_params.max_tokens - len(think_token_ids)
+                else:
+                    vllm_input["prompt_token_ids"] = vllm_input["prompt_token_ids"] + tool_call_token_ids
+                    temp_sampling_params.max_tokens = self.sampling_params.max_tokens - len(tool_call_token_ids)
+            
             completions: List[RequestOutput] = self.inference_engine.generate(
-                prompts=vllm_inputs, sampling_params=self.sampling_params, use_tqdm=(self.rank == 0)
+                prompts=vllm_inputs, sampling_params=temp_sampling_params, use_tqdm=(self.rank == 0)
             )
-            response_ids = [output.token_ids for completion in completions for output in completion.outputs]
+            for i in range(len(completions)):
+                if i % self.sampling_params.n < self.sampling_params.n // 2:
+                    response_ids.append(think_token_ids + completions[i].outputs[0].token_ids)
+                else:
+                    response_ids.append(tool_call_token_ids + completions[i].outputs[0].token_ids)
+            # response_ids = [output.token_ids for completion in completions for output in completion.outputs]
             response_ids = VF.pad_2d_list_to_length(
                 response_ids, self.pad_token_id, max_length=self.config.response_length
             ).to(input_ids.device)
+
+            # Restore original n
+            # self.sampling_params.n = original_sampling_n
+            # Create special token masks for loss weighting
+            # mode_token_mask = torch.zeros_like(response_ids, dtype=torch.bool)
+            
+            # # Mark positions of special tokens in response
+            # for i in range(response_ids.size(0)):
+            #     sample_idx = i % original_sampling_n
+            #     if sample_idx < original_sampling_n // 2:
+            #         # This sample starts with <think>
+            #         mode_token_mask[i,:3] = True
+            #     else:
+            #         # This sample starts with <tool_call>
+            #         mode_token_mask[i,0] = True
 
             if self.sampling_params.n > 1:
                 batch_size = batch_size * self.sampling_params.n
@@ -184,6 +223,7 @@ class vLLMRollout(BaseRollout):
                 "input_ids": sequence_ids,  # here input_ids become the whole sentences
                 "attention_mask": attention_mask,
                 "response_mask": response_mask,
+                # 'mode_token_mask': mode_token_mask,
                 "position_ids": position_ids,
             },
             batch_size=batch_size,

@@ -104,6 +104,7 @@ class RLHFDataset(Dataset):
         self.image_key = image_key
         self.max_prompt_length = max_prompt_length
         self.truncation = truncation
+        self.format_prompt = format_prompt
         # self.system_prompt = system_prompt
         self.max_pixels = max_pixels
         self.min_pixels = min_pixels
@@ -138,13 +139,29 @@ class RLHFDataset(Dataset):
         
       
         # if task_type=='high':
-        prompt_str=  (
-            f"<image>\nThe user query: {text}\n"
-            "Output the thinking process in <think></think> tags, and the function call in <tool_call></tool_call> tags as follows:\n"
-            "<think> ... </think> <tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
-            "or directly output the function call in <tool_call></tool_call> tags as follows:\n"
-            "<tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
-        )
+        if self.format_prompt == "no_think":
+            prompt_str=  (
+                f"<image>\nThe user query: {text}\n"
+                "Directly output the function call in <tool_call></tool_call> tags as follows:\n"
+                "<tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
+            )
+        elif self.format_prompt == "think":
+            prompt_str=  (
+                f"<image>\nThe user query: {text}\n"
+                "Output the thinking process in <think></think> tags, and the function call in <tool_call></tool_call> tags as follows:\n"
+                "<think> ... </think> <tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
+            )
+        elif self.format_prompt == "adaptive":
+            prompt_str=  (
+                f"<image>\nThe user query: {text}\n"
+                "Output the thinking process in <think></think> tags, and the function call in <tool_call></tool_call> tags as follows:\n"
+                "<think> ... </think> <tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
+                "or directly output the function call in <tool_call></tool_call> tags as follows:\n"
+                "<tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
+            )
+        else:
+            raise ValueError(f"Unknown format_prompt {self.format_prompt}.")
+        
  # w/ think prompt
             #  prompt_str=  (
             #     f"You are GUI-R1, a reasoning GUI Agent Assistant. In this UI screenshot <image>, I want you to continue executing the command '{text}', with the action history being '{history}'.\n"

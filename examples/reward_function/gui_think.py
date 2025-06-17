@@ -84,8 +84,8 @@ def r1gui_format_reward(predict_str: str) -> float:
     """
     # 检查 <think> 和 <answer> 的外部结构
     outer_pattern_1 = re.compile(r"<think>.*?</think>\s*<tool_call>.*?</tool_call>", re.DOTALL)
-    outer_pattern_2 = re.compile(r"<tool_call>.*?</tool_call>", re.DOTALL)
-    if not re.fullmatch(outer_pattern_1, predict_str) and not re.fullmatch(outer_pattern_2, predict_str):
+    # outer_pattern_2 = re.compile(r"<tool_call>.*?</tool_call>", re.DOTALL)
+    if not re.fullmatch(outer_pattern_1, predict_str):#  and not re.fullmatch(outer_pattern_2, predict_str):
         return 0.0
 
     # # 提取 <answer> 中的内容
@@ -170,11 +170,13 @@ def compute_score(predict_str: str, ground_truth: str):
     accuracy = r1gui_accuracy_reward(predict_str, ground_truth)
     # calculate how many predict_str contains <think> ... </think>
     # think_count = len(re.findall(r"<think> ... </think>", predict_str, re.DOTALL))
+
     
     return {
         "overall": 0.8 * accuracy + 0.2 * format,
         "format": format,
         "accuracy": accuracy,
+        "think_ratio": 1.0 if "<think>" in predict_str else 0.0,
     }
 
 # pr=("<think> The command 'What's on the menu at IHOP?' suggests a search for information about the menu at an IHOP restaurant. However, "

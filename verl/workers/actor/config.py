@@ -82,6 +82,7 @@ class ActorConfig:
     clip_ratio_low: float = 0.2
     clip_ratio_high: float = 0.3
     clip_ratio_dual: float = 3.0
+    think_alpha: float = 0.0
     ppo_epochs: int = 1
     padding_free: bool = False
     ulysses_sequence_parallel_size: int = 1
