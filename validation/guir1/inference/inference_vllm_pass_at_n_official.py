@@ -43,7 +43,7 @@ SAMPLING_PARAMS = SamplingParams(
     top_p=0.7,
     repetition_penalty=1.05,
     max_tokens=1024,  # 根据需要调整最大生成长度
-    n=8,
+    n=256,
     stop_token_ids=[],  # 停止标志
 )
 
@@ -55,16 +55,16 @@ MICRO_BATCH = 2
 
 def extract_coord(content):
     # Try to find the bbox within <answer> tags, if can not find, return [0, 0, 0, 0]
-    answer_tag_pattern = r'<tool_call>(.*?)</tool_call>'
+    # answer_tag_pattern = r'<tool_call>(.*?)</tool_call>'
     bbox_pattern = r'\{.*\[(\d+),\s*(\d+)]\s*.*\}'
-    content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
+    # content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
     try:
-        if content_answer_match:
-            content_answer = content_answer_match.group(1).strip()
-            coord_match = re.search(bbox_pattern, content_answer)
-            if coord_match:
-                coord = [int(coord_match.group(1)), int(coord_match.group(2))]
-                return coord, True
+        # if content_answer_match:
+        #     content_answer = content_answer_match.group(1).strip()
+        coord_match = re.search(bbox_pattern, content)
+        if coord_match:
+            coord = [int(coord_match.group(1)), int(coord_match.group(2))]
+            return coord, True
         else:
             coord_pattern = r'\{.*\((\d+),\s*(\d+))\s*.*\}'
             coord_match = re.search(coord_pattern, content)
@@ -213,60 +213,73 @@ def custom_collate_fn(batch):
 
 @ray.remote(num_gpus=1)
 class Worker:
-    def __init__(self, model_path, sampling_params):
+    def __init__(self, model_path, sampling_params, output_path=None):
         self.llm = LLM(
             model=model_path,
             limit_mm_per_prompt={"image": 1, "video": 1},
         )
         self.sampling_params = sampling_params
+        self.output_path = output_path
 
     def process_data(self, dataloader):
         results = []
 
         for batch in tqdm(dataloader):
+            batch_results = []
             prompts = batch["prompts"]
             multi_modal_data = batch["multi_modal_data"]
             mm_processor_kwargs = batch["mm_processor_kwargs"]
             original_samples = batch["original_samples"]
 
-            llm_inputs = [
-                {
-                    "prompt": prompt,
-                    "multi_modal_data": mm_data,
-                    "mm_processor_kwargs": mm_kwargs,
-                }
-                for prompt, mm_data, mm_kwargs in zip(prompts, multi_modal_data, mm_processor_kwargs)
-            ]
+            for prefix in ['<think>', '<tool_call>']:
 
-            # 执行推理
-            outputs = self.llm.generate(llm_inputs, sampling_params=self.sampling_params)
+                llm_inputs = [
+                    {
+                        "prompt": prompt+prefix,
+                        "multi_modal_data": mm_data,
+                        "mm_processor_kwargs": mm_kwargs,
+                    }
+                    for prompt, mm_data, mm_kwargs in zip(prompts, multi_modal_data, mm_processor_kwargs)
+                ]
 
-            # 保存结果
-            for original_sample, output in zip(original_samples, outputs):
-                one_pass = False
-                one_fail = False
-                texts = [output.outputs[i].text for i in range(len(output.outputs))]
-                print(texts)
-                gt_bbox = original_sample["gt_bbox"]
-                gt_bbox = [gt_bbox[0]*original_sample['image_size'][0], gt_bbox[1]*original_sample['image_size'][1],
-                            gt_bbox[2]*original_sample['image_size'][0], gt_bbox[3]*original_sample['image_size'][1]]
-                for i in range(len(output.outputs)):
+                # 执行推理
+                outputs = self.llm.generate(llm_inputs, sampling_params=self.sampling_params, use_tqdm=True)
 
-                    generated_text = output.outputs[i].text
-                    # original_sample["pred"] = generated_text
-                    pred_coord, _ = extract_coord(generated_text)
-                    pred_coord = [pred_coord[0]*original_sample["scale"][0],pred_coord[1]*original_sample["scale"][1]]
-                    if gt_bbox[0] < pred_coord[0] < gt_bbox[2] and gt_bbox[1] < pred_coord[1] < gt_bbox[3]:
-                        print(generated_text, "pass")
-                        one_pass = True
-                    else:
-                        print(generated_text, "fail")
-                        one_fail = True
-                    # original_sample["pred_coord"] = pred_coord
-                original_sample["one_pass/one_fail"]=[one_pass, one_fail]
-                original_sample["image"]=''
-                results.append(original_sample)
-                print(original_sample)
+                # 保存结果
+                
+                for original_sample, output in zip(original_samples, outputs):
+                    # one_pass = False
+                    # one_fail = False
+                    flags = []
+                    # texts = [output.outputs[i].text for i in range(len(output.outputs))]
+                    # print(texts)
+                    gt_bbox = original_sample["gt_bbox"]
+
+                    for i in range(len(output.outputs)):
+
+                        generated_text = output.outputs[i].text
+                        # original_sample["pred"] = generated_text
+                        pred_coord, _ = extract_coord(generated_text)
+                        pred_coord = [pred_coord[0]*original_sample["scale"][0],pred_coord[1]*original_sample["scale"][1]]
+                        print(pred_coord, gt_bbox)
+                        if gt_bbox[0] < pred_coord[0] < gt_bbox[2] and gt_bbox[1] < pred_coord[1] < gt_bbox[3]:
+                            # print(generated_text, "pass")
+                            flags.append(True)
+                            # one_pass = True
+                        else:
+                            flags.append(False)
+                        # original_sample["pred_coord"] = pred_coord
+                    original_sample[f"{prefix}_pass"] = flags
+                    original_sample["image"]=''
+                    if prefix == '<tool_call>':
+                        results.append(original_sample)
+                        batch_results.append(original_sample)
+                    # results.append(original_sample)
+                    # print(original_sample)
+            
+            with open(self.output_path, "a") as ans_file:
+                for sample in results:
+                    ans_file.write(json.dumps(sample) + "\n")
 
         return results
 
@@ -294,7 +307,7 @@ def main(args):
     # processor.min_pixels=
 
     # 创建 8 个 Actor，每个 Actor 分配到一个 GPU
-    workers = [Worker.remote(MODEL_PATH, SAMPLING_PARAMS) for _ in range(num_actors)]
+    workers = [Worker.remote(MODEL_PATH, SAMPLING_PARAMS, NEW_FILE) for _ in range(num_actors)]
 
     # 使用 PyTorch Dataset 和 DataLoader
     futures = []
@@ -307,10 +320,10 @@ def main(args):
     all_results = ray.get(futures)
 
     # 将结果写入文件
-    with open(NEW_FILE, "w") as ans_file:
-        for worker_results in all_results:
-            for sample in worker_results:
-                ans_file.write(json.dumps(sample) + "\n")
+    # with open(NEW_FILE, "w") as ans_file:
+    #     for worker_results in all_results:
+    #         for sample in worker_results:
+    #             ans_file.write(json.dumps(sample) + "\n")
 
 
 if __name__ == "__main__":
