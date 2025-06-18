@@ -1,6 +1,6 @@
 data:
-  train_files: /root/workspace/datasets/Uground-V1-Data-Box/ATtrain/uground_no_ls_filtered_512.parquet
-  val_files: /root/workspace/datasets/gui-r1/test.parquet
+  train_files: /your_path/train.parquet
+  val_files: /your_path/val.parquet
   prompt_key: problem
   answer_key: answer
   image_key: images
@@ -59,6 +59,7 @@ worker:
     enable_chunked_prefill: false
     tensor_parallel_size: 2
     limit_images: 0
+    rollout_intervention: false
     val_override_config:
       temperature: 0.5
       n: 1
@@ -76,7 +77,7 @@ worker:
     reward_function: ./examples/reward_function/math.py:compute_score
 
 trainer:
-  total_epochs: 10
+  total_epochs: 20
   max_steps: null
   project_name: GUI-Adaptive-RL
   experiment_name: qwen2_5_7b_math_grpo
@@ -87,7 +88,7 @@ trainer:
   val_before_train: false
   val_only: false
   val_generations_to_log: 3
-  save_freq: 4  # -1 to disable
+  save_freq: 12  # -1 to disable
   save_limit: 5  # -1 to disable
-  save_checkpoint_path: /root/workspace/EasyR1/ckpts/qwen2_5_vl_3b_baseline_think
-  load_checkpoint_path: /root/workspace/EasyR1/ckpts/qwen2_5_vl_3b_baseline_think_no_kl/global_step_20
+  save_checkpoint_path: /your_path/checkpoints
+  load_checkpoint_path: null

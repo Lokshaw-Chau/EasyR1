@@ -178,6 +178,7 @@ def compute_score(predict_str: str, ground_truth: str):
         "format": format,
         "accuracy": accuracy,
         "think_ratio": 1.0 if "<think>" in predict_str else 0.0,
+        "no_think_acc": accuracy if "<think>" not in predict_str else 0.0,
     }
 
 # pr=("<think> The command 'What's on the menu at IHOP?' suggests a search for information about the menu at an IHOP restaurant. However, "

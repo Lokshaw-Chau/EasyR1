@@ -209,7 +209,8 @@ class DataParallelPPOActor(BasePPOActor):
         self.actor_module.train()
 
         temperature = data.meta_info["temperature"]  # temperature must be in the data.meta_info to avoid slient error
-        select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages"]
+
+        select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages", "enforce_nothinking"]
         if self.config.use_kl_loss and not self.config.disable_kl:
             select_keys.append("ref_log_probs")
 
@@ -221,6 +222,7 @@ class DataParallelPPOActor(BasePPOActor):
         # Split to make minibatch iterator for updating the actor
         # See PPO paper for details. https://arxiv.org/abs/1707.06347
         mini_batches = data.select(select_keys, non_tensor_select_keys).split(self.config.global_batch_size_per_device)
+        # mini_batches['enforce_nothinking'] = torch.tensor(data.non_tensor_batch['enforce_nothinking']).bool().to(mini_batches['responses'].device)
 
         metrics = defaultdict(list)
         for _ in range(self.config.ppo_epochs):
@@ -243,10 +245,13 @@ class DataParallelPPOActor(BasePPOActor):
                     response_mask = attention_mask[:, -response_length:]
                     old_log_probs = model_inputs["old_log_probs"]
                     advantages = model_inputs["advantages"]
+                    enforce_nothinking = model_inputs['enforce_nothinking']
 
                     # all return: (bsz, response_length)
                     log_probs = self._forward_micro_batch(model_inputs, temperature=temperature)
                     entropy_loss = -VF.masked_mean(log_probs, response_mask)  # estimator of entropy loss
+                    first_eot_logprobs = log_probs[enforce_nothinking, 0]
+                    first_eot_probs = first_eot_logprobs.exp()
 
                     pg_loss, pg_clipfrac_higher, pg_clipfrac_lower, ppo_kl = core_algos.compute_policy_loss(
                         old_log_probs=old_log_probs,
@@ -281,6 +286,8 @@ class DataParallelPPOActor(BasePPOActor):
                         "actor/entropy_loss": entropy_loss.detach().item(),
                         "actor/ppo_kl": ppo_kl.detach().item(),
                     }
+                    if len(first_eot_probs) > 0:
+                        batch_metrics['adapt_think/first_eot_token_probs/mean'] = first_eot_probs.mean().detach().item(),
                     append_to_dict(metrics, batch_metrics)
 
                 grad_norm = self._optimizer_step()
