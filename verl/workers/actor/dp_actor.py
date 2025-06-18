@@ -252,6 +252,8 @@ class DataParallelPPOActor(BasePPOActor):
                     entropy_loss = -VF.masked_mean(log_probs, response_mask)  # estimator of entropy loss
                     first_eot_logprobs = log_probs[enforce_nothinking, 0]
                     first_eot_probs = first_eot_logprobs.exp()
+                    first_t_logprobs = log_probs[~enforce_nothinking, 0]
+                    first_t_probs = first_t_logprobs.exp()
 
                     pg_loss, pg_clipfrac_higher, pg_clipfrac_lower, ppo_kl = core_algos.compute_policy_loss(
                         old_log_probs=old_log_probs,
@@ -288,6 +290,8 @@ class DataParallelPPOActor(BasePPOActor):
                     }
                     if len(first_eot_probs) > 0:
                         batch_metrics['adapt_think/first_eot_token_probs/mean'] = first_eot_probs.mean().detach().item(),
+                    if len(first_t_probs) > 0:
+                        batch_metrics['adapt_think/first_t_token_probs/mean'] = first_t_probs.mean().detach().item(),
                     append_to_dict(metrics, batch_metrics)
 
                 grad_norm = self._optimizer_step()
