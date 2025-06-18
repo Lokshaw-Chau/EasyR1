@@ -15,6 +15,7 @@
 import os
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Union
+from copy import deepcopy
 
 import numpy as np
 import torch
@@ -29,7 +30,6 @@ from ...utils.tokenizer import get_processor
 from ...utils.torch_dtypes import PrecisionType
 from .base import BaseRollout
 from .config import RolloutConfig
-
 
 def _repeat_interleave(value: Union[torch.Tensor, np.ndarray], repeats: int) -> Union[torch.Tensor, List[Any]]:
     if isinstance(value, torch.Tensor):
@@ -60,6 +60,7 @@ class vLLMRollout(BaseRollout):
         self.rank = int(os.getenv("RANK", "0"))
         self.config = config
         self.pad_token_id = tokenizer.pad_token_id
+        self.rollout_intervention = config.rollout_intervention
         if config.tensor_parallel_size > torch.distributed.get_world_size():
             raise ValueError("Tensor parallelism size should be less than world size.")
 
@@ -145,14 +146,59 @@ class vLLMRollout(BaseRollout):
         # print(f"vLLM inputs: {vllm_inputs}.")
         # users can customize different sampling_params at different run
         with self.update_sampling_params(**prompts.meta_info):
-            completions: List[RequestOutput] = self.inference_engine.generate(
-                prompts=vllm_inputs, sampling_params=self.sampling_params, use_tqdm=(self.rank == 0)
-            )
-            response_ids = [output.token_ids for completion in completions for output in completion.outputs]
+            if not self.rollout_intervention:
+                completions: List[RequestOutput] = self.inference_engine.generate(
+                    prompts=vllm_inputs, sampling_params=self.sampling_params, use_tqdm=(self.rank == 0)
+                )
+                response_ids = [output.token_ids for completion in completions for output in completion.outputs]
+                enforce_nothinking = [False] * len(response_ids)
+            
+            else:
+                sampling_params_nothinking = deepcopy(self.sampling_params)
+                sampling_params_nothinking.n = self.sampling_params.n // 2
+                # enforce the first token to be "<tool_call>"
+                sampling_params_nothinking.max_tokens = self.sampling_params.max_tokens - 1
+                vllm_inputs_nothinking = deepcopy(vllm_inputs)
+                for i, ipt in enumerate(vllm_inputs_nothinking):
+                    ipt['prompt_token_ids'] = ipt['prompt_token_ids'] + [151657] # "<tool_call>" token id
+                outputs_nothinking = self.inference_engine.generate(
+                    prompts=vllm_inputs_nothinking,  # because we have already convert it to prompt token id
+                    sampling_params=sampling_params_nothinking,
+                    use_tqdm=(self.rank == 0))
+                
+                sampling_params_thinking = deepcopy(self.sampling_params)
+                sampling_params_thinking.n = self.sampling_params.n - sampling_params_nothinking.n
+                # enforce the first token to be "<think>"
+                sampling_params_thinking.max_tokens = self.sampling_params.max_tokens - 3
+                vllm_inputs_thinking = deepcopy(vllm_inputs)
+                for i, ipt in enumerate(vllm_inputs_thinking):
+                    ipt['prompt_token_ids'] = ipt['prompt_token_ids'] + [13708, 766, 29]
+                outputs_thinking = self.inference_engine.generate(
+                    prompts=vllm_inputs_thinking,  # because we have already convert it to prompt token id
+                    sampling_params=sampling_params_thinking,
+                    use_tqdm=(self.rank == 0))
+                
+                response_ids = []
+                enforce_nothinking = []
+                assert len(outputs_nothinking) == len(outputs_thinking), f"{len(outputs_nothinking)} != {len(outputs_thinking)}"
+                for output_nothinking, output_thinking in zip(outputs_nothinking, outputs_thinking):
+                    if output_thinking != []:
+                        for sample_id in range(len(output_thinking.outputs)):
+                            # enforce_nothinking.append(True)
+                            enforce_nothinking.append(False)
+                            response_ids.append([13708, 766, 29] + output_thinking.outputs[sample_id].token_ids)
+                    if output_nothinking != []:
+                        for sample_id in range(len(output_nothinking.outputs)):
+                            enforce_nothinking.append(True)
+                            # response.append(output_nothinking.outputs[sample_id].token_ids)
+                            response_ids.append([151657] + output_nothinking.outputs[sample_id].token_ids)
+                
+            
             response_ids = VF.pad_2d_list_to_length(
-                response_ids, self.pad_token_id, max_length=self.config.response_length
-            ).to(input_ids.device)
-
+                    response_ids, self.pad_token_id, max_length=self.config.response_length
+                ).to(input_ids.device)
+            
+            enforce_nothinking = torch.tensor(enforce_nothinking).to(input_ids.device)
             if self.sampling_params.n > 1:
                 batch_size = batch_size * self.sampling_params.n
                 input_ids = _repeat_interleave(input_ids, self.sampling_params.n)
@@ -185,6 +231,7 @@ class vLLMRollout(BaseRollout):
                 "attention_mask": attention_mask,
                 "response_mask": response_mask,
                 "position_ids": position_ids,
+                'enforce_nothinking': enforce_nothinking
             },
             batch_size=batch_size,
         )
