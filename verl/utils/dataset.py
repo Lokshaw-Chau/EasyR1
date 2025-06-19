@@ -156,7 +156,7 @@ class RLHFDataset(Dataset):
                 f"<image>\nThe user query: {text}\n"
                 "Output the thinking process in <think></think> tags, and the function call in <tool_call></tool_call> tags as follows:\n"
                 "<think> ... </think> <tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
-                "or directly output the function call in <tool_call></tool_call> tags as follows:\n"
+                "or directly output the function call in <tool_call></tool_call> tags as follows if you think the query is intuitive:\n"
                 "<tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
             )
         else:

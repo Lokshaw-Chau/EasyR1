@@ -249,7 +249,11 @@ class DataParallelPPOActor(BasePPOActor):
 
                     # all return: (bsz, response_length)
                     log_probs = self._forward_micro_batch(model_inputs, temperature=temperature)
-                    entropy_loss = -VF.masked_mean(log_probs, response_mask)  # estimator of entropy loss
+                    if self.config.en_loss_wo_first_token:
+                        print("Using en_loss_wo_first_token, the first token log_probs will not be used in entropy loss.")
+                        entropy_loss = -VF.masked_mean(log_probs[:,1:], response_mask[:,1:])  # estimator of entropy loss
+                    else:
+                        entropy_loss = -VF.masked_mean(log_probs, response_mask)  # estimator of entropy loss
                     first_eot_logprobs = log_probs[enforce_nothinking, 0]
                     first_eot_probs = first_eot_logprobs.exp()
                     first_t_logprobs = log_probs[~enforce_nothinking, 0]
