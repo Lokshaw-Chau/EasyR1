@@ -66,11 +66,12 @@ def extract_coord(content):
         return [0, 0, 0, 0], False
     
 class MultiModalDataset(Dataset):
-    def __init__(self, data, processor, prefix=None):
+    def __init__(self, data, processor, prefix=None, prompt_type='adaptive'):
         self.data = data
         self.processor = processor
         self.processor.max_pixels=1258291
         self.prefix = prefix if prefix else ""
+        self.prompt_type = prompt_type
 
     def __len__(self):
         return len(self.data)
@@ -84,13 +85,28 @@ class MultiModalDataset(Dataset):
         # image = copy.deepcopy(dummy_image)
         text = sample["instruction"]
 
-        user_query = (
-            f"<image>\nThe user query: {text}\n"
-            "Output the thinking process in <think></think> tags, and the function call in <tool_call></tool_call> tags as follows:\n"
-            "<think> ... </think> <tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
-            "or directly output the function call in <tool_call></tool_call> tags as follows:\n"
-            "<tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
-        )
+        if self.prompt_type == 'think':
+            user_query = (
+                f"<image>\nThe user query: {text}\n"
+                "Output the thinking process in <think></think> tags, and the function call in <tool_call></tool_call> tags as follows:\n"
+                "<think> ... </think> <tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
+            )
+        elif self.prompt_type == 'no_think':
+            user_query = (
+                f"<image>\nThe user query: {text}\n"
+                "Directly output the function call in <tool_call></tool_call> tags as follows:\n"
+                "<tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
+            )
+        elif self.prompt_type == 'adaptive':
+            user_query = (
+                f"<image>\nThe user query: {text}\n"
+                "Output the thinking process in <think></think> tags, and the function call in <tool_call></tool_call> tags as follows:\n"
+                "<think> ... </think> <tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
+                "or directly output the function call in <tool_call></tool_call> tags as follows:\n"
+                "<tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
+            )
+        else:
+            raise ValueError(f"Unsupported prompt type: {self.prompt_type}")
 
         resized_height, resized_width  = smart_resize(dummy_image.height,
             dummy_image.width,
@@ -275,7 +291,7 @@ def main(args):
     # 使用 PyTorch Dataset 和 DataLoader
     futures = []
     for i, chunk in enumerate(data_chunks):
-        dataset = MultiModalDataset(chunk, processor, args.prefix)
+        dataset = MultiModalDataset(chunk, processor, args.prefix, args.prompt_type)
         dataloader = DataLoader(dataset, batch_size=MICRO_BATCH, shuffle=False, num_workers=16, collate_fn=custom_collate_fn)
         futures.append(workers[i].process_data.remote(dataloader))
 
@@ -295,6 +311,7 @@ if __name__ == "__main__":
     parser.add_argument('--data_path', type=str, default="<data_path>")
     parser.add_argument('--output_path', type=str, default='./outputs')
     parser.add_argument('--num_actor', type=int, default=8)
+    parser.add_argument('--prompt_type', type=str, default='adaptive', choices=['think', 'no_think', 'adaptive'])
     parser.add_argument('--prefix', type=str, default=None)
     args = parser.parse_args()
     main(args)
