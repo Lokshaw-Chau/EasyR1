@@ -251,6 +251,7 @@ class Worker:
             # 保存结果
             for original_sample, output in zip(original_samples, outputs):
                 generated_text = output.outputs[0].text
+                print(generated_text)
                 # gt_bbox = original_sample["gt_bbox"]
                 original_sample["pred"] = generated_text
                 pred_coord, _ = extract_coord(generated_text)
