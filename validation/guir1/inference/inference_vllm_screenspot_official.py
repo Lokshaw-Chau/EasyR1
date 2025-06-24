@@ -220,17 +220,19 @@ def custom_collate_fn(batch):
 
 @ray.remote(num_gpus=1)
 class Worker:
-    def __init__(self, model_path, sampling_params):
+    def __init__(self, model_path, sampling_params, output_path=None):
         self.llm = LLM(
             model=model_path,
             limit_mm_per_prompt={"image": 1, "video": 1},
         )
         self.sampling_params = sampling_params
+        self.output_path = output_path
 
     def process_data(self, dataloader):
-        results = []
+        
 
         for batch in tqdm(dataloader):
+            results = []
             prompts = batch["prompts"]
             multi_modal_data = batch["multi_modal_data"]
             mm_processor_kwargs = batch["mm_processor_kwargs"]
@@ -259,6 +261,11 @@ class Worker:
                 original_sample["scale"]=[]
                 original_sample["image"]=''
                 results.append(original_sample)
+            
+            print(f"writing results to file...{self.output_path}")
+            with open(self.output_path, "a") as f:
+                for result in results:
+                    f.write(json.dumps(result) + "\n")
 
         return results
 
@@ -287,7 +294,7 @@ def main(args):
     # processor.min_pixels=
 
     # 创建 8 个 Actor，每个 Actor 分配到一个 GPU
-    workers = [Worker.remote(MODEL_PATH, SAMPLING_PARAMS) for _ in range(num_actors)]
+    workers = [Worker.remote(MODEL_PATH, SAMPLING_PARAMS, NEW_FILE) for _ in range(num_actors)]
 
     # 使用 PyTorch Dataset 和 DataLoader
     futures = []
@@ -300,10 +307,10 @@ def main(args):
     all_results = ray.get(futures)
 
     # 将结果写入文件
-    with open(NEW_FILE, "w") as ans_file:
-        for worker_results in all_results:
-            for sample in worker_results:
-                ans_file.write(json.dumps(sample) + "\n")
+    # with open(NEW_FILE, "w") as ans_file:
+    #     for worker_results in all_results:
+    #         for sample in worker_results:
+    #             ans_file.write(json.dumps(sample) + "\n")
 
 
 if __name__ == "__main__":

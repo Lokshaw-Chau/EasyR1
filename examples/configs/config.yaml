@@ -61,6 +61,7 @@ worker:
     tensor_parallel_size: 2
     limit_images: 0
     rollout_intervention: false
+    intervention_no_think_n: 8
     val_override_config:
       temperature: 0.5
       n: 1

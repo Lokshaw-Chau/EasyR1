@@ -39,6 +39,7 @@ class RolloutConfig:
     disable_log_stats: bool = True
     val_override_config: Dict[str, Any] = field(default_factory=dict)
     rollout_intervention: bool = False
+    intervention_no_think_n: int = 0
     """auto keys"""
     prompt_length: int = field(default=-1, init=False)
     response_length: int = field(default=-1, init=False)
