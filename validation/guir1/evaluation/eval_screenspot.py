@@ -66,11 +66,11 @@ def evaluate(args):
             score_dict[category] += 1
             score_dict[group] += 1
 
-    all =  sum([score_dict[k] for k in score_dict.keys() if not k.endswith("full") and '-' in k]) / sum([score_dict[k] for k in score_dict.keys() if k.endswith("full") and '-' in k])
+    all =  sum([score_dict[k] for k in score_dict.keys() if not k.endswith("full") and '-' in k]) / sum([score_dict[k] for k in score_dict.keys() if k.endswith("full") and '-' in k]) * 100
     logger.info(f"Average Score: {all}")
 
     for key in [k for k in score_dict.keys() if not k.endswith("full")]:
-        logger.info(f"Type {key} : {(score_dict[key] / score_dict[key+'_full'])}")
+        logger.info(f"Type {key} : {(score_dict[key] / score_dict[key+'_full'])* 100}")
 
     
 

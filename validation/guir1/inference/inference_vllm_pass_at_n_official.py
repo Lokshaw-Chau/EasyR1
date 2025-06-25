@@ -278,7 +278,7 @@ class Worker:
                     # print(original_sample)
             
             with open(self.output_path, "a") as ans_file:
-                for sample in results:
+                for sample in batch_results:
                     ans_file.write(json.dumps(sample) + "\n")
 
         return results
