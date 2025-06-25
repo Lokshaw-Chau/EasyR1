@@ -346,27 +346,27 @@ def compute_policy_loss(
     clipped_pg_loss_lower = torch.min(clipped_pg_loss_higher, pg_loss3)  # clip if pg_loss > pg_loss3 and adv < 0
     final_pg_loss = torch.where(advantages < 0, clipped_pg_loss_lower, clipped_pg_loss_higher)
     pg_clipfrac_lower = (clipped_pg_loss_higher > pg_loss3).float() * (advantages < 0).float()
+    # Masks    
+    cond_mask = response_mask.clone()
+    cond_mask[:, 1:] = 0                    # only t = 0, the control token
+    resp_mask = response_mask.clone()
+    resp_mask[:, 0]  = 0                    # t ≥ 1, the response tokens
 
+    # avg_len = response_mask.sum(dim=1).float().mean()
+    cond_loss_for_log = VF.masked_mean(final_pg_loss, cond_mask, dim=1)  # average over the control token
+    resp_loss_for_log = VF.masked_mean(final_pg_loss, resp_mask, dim=1)  # average over the response tokens
+    
     if thinkless_alpha >= 0: # Decoupled GRPO
-        # Masks
         print("Decoupled GRPO")
-        cond_mask = response_mask.clone()
-        cond_mask[:, 1:] = 0                    # only t = 0, the control token
-        resp_mask = response_mask.clone()
-        resp_mask[:, 0]  = 0                    # t ≥ 1, the response tokens
-
-        # avg_len = response_mask.sum(dim=1).float().mean()
-
-        cond_loss = VF.masked_mean(final_pg_loss, cond_mask)
-        resp_loss = VF.masked_mean(final_pg_loss, resp_mask)
-
+        cond_loss = VF.masked_mean(final_pg_loss, cond_mask)  # average over the control token
+        resp_loss = VF.masked_mean(final_pg_loss, resp_mask)  # average over
         final_pg_loss = thinkless_alpha * cond_loss + resp_loss
     else: 
         final_pg_loss = VF.masked_mean(final_pg_loss, response_mask)
     pg_clipfrac_higher = VF.masked_mean(pg_clipfrac_higher, response_mask)
     pg_clipfrac_lower = VF.masked_mean(pg_clipfrac_lower, response_mask)
     ppo_kl = VF.masked_mean(-negative_approx_kl, response_mask)
-    return final_pg_loss, pg_clipfrac_higher, pg_clipfrac_lower, ppo_kl
+    return final_pg_loss, pg_clipfrac_higher, pg_clipfrac_lower, ppo_kl, cond_loss_for_log, resp_loss_for_log
 
 
 def compute_value_loss(

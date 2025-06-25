@@ -265,7 +265,7 @@ class DataParallelPPOActor(BasePPOActor):
                     first_t_logprobs = log_probs[~enforce_nothinking, 0]
                     first_t_probs = first_t_logprobs.exp()
 
-                    pg_loss, pg_clipfrac_higher, pg_clipfrac_lower, ppo_kl = core_algos.compute_policy_loss(
+                    pg_loss, pg_clipfrac_higher, pg_clipfrac_lower, ppo_kl, cond_loss, resp_loss = core_algos.compute_policy_loss(
                         old_log_probs=old_log_probs,
                         log_probs=log_probs,
                         advantages=advantages,
@@ -291,21 +291,30 @@ class DataParallelPPOActor(BasePPOActor):
                     loss = pg_loss / gradient_accumulation
                     loss.backward()
 
+                    cond_loss = cond_loss.mean() / gradient_accumulation
+                    resp_loss = resp_loss / gradient_accumulation
+
+
                     batch_metrics = {
                         "actor/pg_loss": pg_loss.detach().item(),
                         "actor/pg_clipfrac_higher": pg_clipfrac_higher.detach().item(),
                         "actor/pg_clipfrac_lower": pg_clipfrac_lower.detach().item(),
                         "actor/entropy_loss": entropy_loss.detach().item(),
                         "actor/force_think_entropy_loss": force_think_entropy_loss.detach().item(),
-                        
                         "actor/ppo_kl": ppo_kl.detach().item(),
+                        "actor/cond_loss": cond_loss.detach().item(),
+                        # "actor/resp_loss": resp_loss.detach().item(),
                     }
                     if len(first_eot_probs) > 0:
                         batch_metrics['adapt_think/first_eot_token_probs/mean'] = first_eot_probs.mean().detach().item()
                         batch_metrics["actor/force_no_think_entropy_loss"] = force_no_think_entropy_loss.detach().item()
+                        batch_metrics["actor/resp_loss_no_think/mean"] = resp_loss[enforce_nothinking].mean().detach().item()
+
                     if len(first_t_probs) > 0:
                         batch_metrics['adapt_think/first_t_token_probs/mean'] = first_t_probs.mean().detach().item()
                         batch_metrics["actor/force_think_entropy_loss"] = force_think_entropy_loss.detach().item()
+                        batch_metrics["actor/resp_loss_think/mean"] = resp_loss[~enforce_nothinking].mean().detach().item()
+
                     append_to_dict(metrics, batch_metrics)
 
                 grad_norm = self._optimizer_step()
