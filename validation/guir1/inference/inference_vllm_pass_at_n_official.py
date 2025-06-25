@@ -38,15 +38,6 @@ MODEL_PATH = ""
 #     stop_token_ids=[],  # 停止标志
 # )
 
-SAMPLING_PARAMS = SamplingParams(
-    temperature=1.0,
-    top_p=0.7,
-    repetition_penalty=1.05,
-    max_tokens=1024,  # 根据需要调整最大生成长度
-    n=256,
-    stop_token_ids=[],  # 停止标志
-)
-
 # 数据路径
 DATA_PATH = ""
 
@@ -272,7 +263,7 @@ class Worker:
                     original_sample[f"{prefix}_pass"] = flags
                     original_sample["image"]=''
                     if prefix == '<tool_call>':
-                        results.append(original_sample)
+                        # results.append(original_sample)
                         batch_results.append(original_sample)
                     # results.append(original_sample)
                     # print(original_sample)
@@ -332,5 +323,14 @@ if __name__ == "__main__":
     parser.add_argument('--data_path', type=str, default="<data_path>")
     parser.add_argument('--output_path', type=str, default='./outputs')
     parser.add_argument('--num_actor', type=int, default=8)
+    parser.add_argument('--n', type=int, default=8, help='Number of trials to run')
     args = parser.parse_args()
+    SAMPLING_PARAMS = SamplingParams(
+    temperature=1.0,
+    top_p=0.7,
+    repetition_penalty=1.05,
+    max_tokens=1024,  # 根据需要调整最大生成长度
+    n=args.n,
+    stop_token_ids=[],  # 停止标志
+)
     main(args)
