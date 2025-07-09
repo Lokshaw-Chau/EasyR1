@@ -291,7 +291,7 @@ class DataParallelPPOActor(BasePPOActor):
                     loss = pg_loss / gradient_accumulation
                     loss.backward()
 
-                    cond_loss = cond_loss.mean() / gradient_accumulation
+                    cond_loss = cond_loss / gradient_accumulation
                     resp_loss = resp_loss / gradient_accumulation
 
 

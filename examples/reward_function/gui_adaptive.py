@@ -173,7 +173,7 @@ def compute_score(predict_str: str, ground_truth: str):
 
     
     return {
-        "overall": 0.8 * accuracy + 0.2 * format,
+        "overall": accuracy,#  + 0.2 * format,
         "format": format,
         "accuracy": accuracy,
         "think_ratio": 1.0 if "<think>" in predict_str else 0.0,
