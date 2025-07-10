@@ -23,7 +23,7 @@ algorithm:
   kl_penalty: low_var_kl
   kl_coef: 1.0e-2
   think_alpha: -1 # -1 to disable
-
+  entropy_from_logits_with_chunking: false
 worker:
   actor:
     global_batch_size: 128
@@ -32,7 +32,8 @@ worker:
     max_grad_norm: 1.0
     padding_free: true
     ulysses_sequence_parallel_size: 1
-    en_loss_wo_first_token: false
+    entropy_bonus_alpha: 0.1
+
     model:
       model_path: Qwen/Qwen2.5-7B-Instruct
       enable_gradient_checkpointing: true

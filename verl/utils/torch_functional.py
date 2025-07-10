@@ -35,8 +35,8 @@ except ImportError:
 
 
 @torch.compiler.disable()
-def log_probs_from_logits_flash_attn(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-    output = cross_entropy_loss(logits, labels, inplace_backward=True)
+def log_probs_from_logits_flash_attn(logits: torch.Tensor, labels: torch.Tensor, inplace_backward: bool) -> torch.Tensor:
+    output = cross_entropy_loss(logits, labels, inplace_backward=inplace_backward)
     if not isinstance(output, tuple):
         raise ValueError(
             "please make sure flash-attn>=2.4.3 where cross_entropy_loss returns Tuple[losses, z_losses]."
@@ -45,7 +45,7 @@ def log_probs_from_logits_flash_attn(logits: torch.Tensor, labels: torch.Tensor)
     return -output[0]
 
 
-def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor, inplace_backward: bool) -> torch.Tensor:
     """Compute log probs on the label ids given logits.
 
     We may use torch compile to speed up computing.
@@ -53,6 +53,7 @@ def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor) -> torch.T
     Args:
         logits (torch.Tensor): logits of the model, shape (batch_size, seqlen, vocab_size)
         labels (torch.Tensor): labels of the model, shape (batch_size, seqlen)
+        inplace_backward (bool): whether to use inplace backward for flash-attn cross entropy loss
 
     Returns:
         torch.Tensor: log probs of the labels, shape (batch_size, seqlen)
@@ -62,7 +63,7 @@ def log_probs_from_logits(logits: torch.Tensor, labels: torch.Tensor) -> torch.T
     logits = logits.contiguous().view(-1, vocab_dim)
     labels = labels.contiguous().view(-1)
     if FLAH_ATTN_CROSS_ENTROPY_LOSS_AVAILABLE:
-        output = log_probs_from_logits_flash_attn(logits, labels)
+        output = log_probs_from_logits_flash_attn(logits, labels, inplace_backward=inplace_backward)
     else:  # fall back to torch kernel, upcast logits to fp32
         output = F.cross_entropy(logits.float(), labels, reduction="none")
 
@@ -338,3 +339,20 @@ class AnyPrecisionAdamW(torch.optim.Optimizer):
                     compensation.add_(temp_buffer.sub_(p.data))
                 else:  # usual AdamW updates
                     p.data.addcdiv_(exp_avg, centered_variance, value=-step_size)
+
+def entropy_from_logits(logits: torch.Tensor):
+    """Calculate entropy from logits."""
+    pd = torch.nn.functional.softmax(logits, dim=-1)
+    entropy = torch.logsumexp(logits, dim=-1) - torch.sum(pd * logits, dim=-1)
+    return entropy
+
+
+def entropy_from_logits_with_chunking(logits: torch.Tensor, chunk_size: int = 2048):
+    """Memory-efficient entropy calculation with chunking."""
+    entropy = torch.zeros(logits.shape[0], device=logits.device)
+    for i in range(0, logits.shape[0], chunk_size):
+        logits_chunk = logits[i : i + chunk_size].float()
+        pd_chunk = torch.nn.functional.softmax(logits_chunk, dim=-1)
+        entropy_chunk = torch.logsumexp(logits_chunk, dim=-1) - torch.sum(pd_chunk * logits_chunk, dim=-1)
+        entropy[i : i + chunk_size] = entropy_chunk
+    return entropy

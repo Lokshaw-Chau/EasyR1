@@ -180,10 +180,11 @@ class vLLMRollout(BaseRollout):
                     sampling_params_thinking = deepcopy(self.sampling_params)
                     sampling_params_thinking.n = intervention_think_n
                     # enforce the first token to be "<think>"
-                    sampling_params_thinking.max_tokens = self.sampling_params.max_tokens - 3
+                    sampling_params_thinking.max_tokens = self.sampling_params.max_tokens - 1
                     vllm_inputs_thinking = deepcopy(vllm_inputs)
                     for i, ipt in enumerate(vllm_inputs_thinking):
-                        ipt['prompt_token_ids'] = ipt['prompt_token_ids'] + [13708, 766, 29]
+                        # ipt['prompt_token_ids'] = ipt['prompt_token_ids'] + [13708, 766, 29]
+                        ipt['prompt_token_ids'] = ipt['prompt_token_ids'] + [13708]
                     outputs_thinking = self.inference_engine.generate(
                         prompts=vllm_inputs_thinking,  # because we have already convert it to prompt token id
                         sampling_params=sampling_params_thinking,
@@ -199,7 +200,7 @@ class vLLMRollout(BaseRollout):
                         for sample_id in range(len(output_thinking.outputs)):
                             # enforce_nothinking.append(True)
                             enforce_nothinking.append(False)
-                            response_ids.append([13708, 766, 29] + output_thinking.outputs[sample_id].token_ids)
+                            response_ids.append([13708] + output_thinking.outputs[sample_id].token_ids)
                     else:
                         print("No thinking output!")
                     if output_nothinking != []:
