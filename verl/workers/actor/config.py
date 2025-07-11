@@ -111,3 +111,6 @@ class RefConfig:
     padding_free: bool = field(default=False, init=False)
     ulysses_sequence_parallel_size: int = field(default=1, init=False)
     use_torch_compile: bool = field(default=True, init=False)
+    entropy_from_logits_with_chunking: bool = False
+    entropy_bonus_alpha: float = 0.01
+
