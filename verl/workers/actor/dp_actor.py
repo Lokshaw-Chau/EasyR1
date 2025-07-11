@@ -323,9 +323,8 @@ class DataParallelPPOActor(BasePPOActor):
                         metrics["actor/kl_coef"] = self.config.kl_coef
 
                     if self.calculate_entropy:
-                        entropy_bonus =  - mode_entropy.mean() * self.config.entropy_bonus_alpha
-                        pg_loss = pg_loss + entropy_bonus
-                        metrics["actor/entropy_bonus"] = entropy_bonus.detach().item()
+                        pg_loss = pg_loss - mode_entropy.mean() * self.config.entropy_bonus_alpha
+                        metrics["actor/mode_entropy"] = mode_entropy.mean().detach().item()
                     
                     loss = pg_loss / gradient_accumulation
                     loss.backward()
@@ -349,7 +348,7 @@ class DataParallelPPOActor(BasePPOActor):
 
                     if len(first_t_probs) > 0:
                         batch_metrics['adapt_think/first_t_token_probs/mean'] = first_t_probs.mean().detach().item()
-                        batch_metrics["actor/force_think_entropy_loss"] = force_think_resp_entropy.detach().item()
+                        batch_metrics["actor/force_think_resp_entropy"] = force_think_resp_entropy.detach().item()
                         batch_metrics["actor/resp_loss_think/mean"] = resp_loss[~enforce_nothinking].mean().detach().item()
 
                     append_to_dict(metrics, batch_metrics)
