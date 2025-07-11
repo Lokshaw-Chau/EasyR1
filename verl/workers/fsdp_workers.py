@@ -518,8 +518,11 @@ class FSDPWorker(Worker):
         with self.ulysses_sharding_manager:
             data = self.ulysses_sharding_manager.preprocess_data(data)
             output, entropys = self.actor.compute_log_prob(data=data)
+            tensors_dict = {"old_log_probs": output}
+            if entropys is not None:
+                tensors_dict["entropys"] = entropys
             output = DataProto.from_dict(
-                tensors={"old_log_probs": output, "entropys": entropys}, meta_info={"temperature": self.config.rollout.temperature}
+                tensors=tensors_dict, meta_info={"temperature": self.config.rollout.temperature}
             )
             output = self.ulysses_sharding_manager.postprocess_data(output)
 
