@@ -530,6 +530,10 @@ class RayPPOTrainer:
                     # compute global_valid tokens
                     batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
 
+                    # update training progress for reward function
+                    if self.reward_fn is not None:
+                        ray.get(self.reward_fn.set_training_progress.remote(self.global_step, self.training_steps))
+
                     # compute reward
                     with timer("reward", timing_raw):
                         reward_ref = self.reward_fn.compute_reward.remote(batch)

@@ -33,9 +33,9 @@ class RewardScore(TypedDict):
     accuracy: Optional[float]
 
 
-SequentialRewardFunction = Callable[[str, str], RewardScore]
+SequentialRewardFunction = Callable[[str, str, Optional[float]], RewardScore]
 
-BatchRewardFunction = Callable[[List[str], List[str]], List[RewardScore]]
+BatchRewardFunction = Callable[[List[str], List[str], Optional[float]], List[RewardScore]]
 
 
 class FunctionRewardManager(ABC):
@@ -64,6 +64,19 @@ class FunctionRewardManager(ABC):
         self.reward_fn = partial(reward_fn, **config.reward_function_kwargs)
         self.config = config
         self.tokenizer = tokenizer
+        self.current_step = 0
+        self.total_steps = getattr(config, 'total_steps', None)
+
+    def set_training_progress(self, current_step: int, total_steps: int):
+        """Set current training progress."""
+        self.current_step = current_step
+        self.total_steps = total_steps
+
+    def get_training_progress(self) -> Optional[float]:
+        """Get current training progress as a ratio (0.0 to 1.0)."""
+        if self.total_steps is None or self.total_steps <= 0:
+            return None
+        return min(1.0, max(0.0, self.current_step / self.total_steps))
 
     @abstractmethod
     def compute_reward(self, data: DataProto) -> Tuple[torch.Tensor, Dict[str, List[float]]]:
@@ -101,6 +114,8 @@ class BatchFunctionRewardManager(FunctionRewardManager):
         response_str, ground_truth = [], []
         response_ids = data.batch["responses"]
         response_length = data.batch["response_mask"].sum(dim=-1)
+        training_progress = self.get_training_progress()
+        
         for i in range(len(data)):
             valid_response_ids = response_ids[i][: response_length[i]]
             response_str.append(
@@ -108,7 +123,7 @@ class BatchFunctionRewardManager(FunctionRewardManager):
             )
             ground_truth.append(data.non_tensor_batch["ground_truth"][i])
 
-        scores = self.reward_fn(response_str, ground_truth)
+        scores = self.reward_fn(response_str, ground_truth, training_progress)
         reward_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
         reward_metrics = defaultdict(list)
         for i, score in enumerate(scores):

@@ -357,10 +357,10 @@ def compute_policy_loss(
     resp_loss_for_log = VF.masked_mean(final_pg_loss, resp_mask, dim=1)  # average over the response tokens
     
     if thinkless_alpha >= 0: # Decoupled GRPO
-        print("Decoupled GRPO")
+        # print("Decoupled GRPO")
         cond_loss = VF.masked_mean(final_pg_loss, cond_mask)  # average over the control token
         resp_loss = VF.masked_mean(final_pg_loss, resp_mask)  # average over
-        final_pg_loss = thinkless_alpha * cond_loss + resp_loss
+        final_pg_loss = cond_loss + thinkless_alpha * resp_loss
     else: 
         final_pg_loss = VF.masked_mean(final_pg_loss, response_mask)
     pg_clipfrac_higher = VF.masked_mean(pg_clipfrac_higher, response_mask)
