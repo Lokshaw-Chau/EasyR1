@@ -147,6 +147,10 @@ def compute_grpo_outcome_advantage(
             shape: (bs, response_length)
         response_mask: `(torch.Tensor)`
             shape: (bs, response_length)
+        index: `(torch.Tensor)`
+            shape: (bs,) - index for grouping
+        eps: `(float)`
+            small value to avoid division by zero
 
     Returns:
         advantages: `(torch.Tensor)`
@@ -170,6 +174,84 @@ def compute_grpo_outcome_advantage(
 
     for i in range(bsz):
         scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + eps)
+
+    returns = scores.unsqueeze(-1) * response_mask
+    return returns, returns
+
+
+# NOTE: GRPO with separated thinking/non-thinking groups
+@torch.no_grad()
+def compute_grpo_sep_outcome_advantage(
+    token_level_rewards: torch.Tensor, 
+    response_mask: torch.Tensor, 
+    index: torch.Tensor, 
+    enforce_nothinking: torch.Tensor, 
+    eps: float = 1e-6
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Compute advantage for GRPO with separated thinking/non-thinking groups.
+    Each group (thinking vs non-thinking) computes its own mean and std for normalization.
+
+    Args:
+        token_level_rewards: `(torch.Tensor)`
+            shape: (bs, response_length)
+        response_mask: `(torch.Tensor)`
+            shape: (bs, response_length)
+        index: `(torch.Tensor)`
+            shape: (bs,) - index for grouping
+        enforce_nothinking: `(torch.Tensor)`
+            shape: (bs,) - boolean tensor indicating whether to enforce no thinking
+        eps: `(float)`
+            small value to avoid division by zero
+
+    Returns:
+        advantages: `(torch.Tensor)`
+            shape: (bs, response_length)
+        returns: `(torch.Tensor)`
+            shape: (bs, response_length)
+
+    """
+    scores = token_level_rewards.sum(dim=-1)
+    bsz = scores.shape[0]
+    
+    # Group by both index and enforce_nothinking flag
+    id2score_think = defaultdict(list)      # enforce_nothinking = False (thinking)
+    id2score_nothink = defaultdict(list)    # enforce_nothinking = True (no thinking)
+    id2mean, id2std = {}, {}
+    print("Seperated GRPO")
+    for i in range(bsz):
+        if enforce_nothinking[i]:
+            id2score_nothink[index[i]].append(scores[i])
+        else:
+            id2score_think[index[i]].append(scores[i])
+    
+    # Compute mean and std for thinking group
+    for idx in id2score_think:
+        assert len(id2score_nothink[idx]) == len(id2score_think[idx]), "Both groups should have the same number of indices."
+        if len(id2score_think[idx]) > 1:
+            id2mean[(idx, False)] = torch.mean(torch.tensor(id2score_think[idx]))
+            id2std[(idx, False)] = torch.std(torch.tensor(id2score_think[idx]))
+        else:
+            # If only one sample, no normalization needed (keep original score)
+            id2mean[(idx, False)] = torch.tensor(0.0)
+            id2std[(idx, False)] = torch.tensor(1.0)
+    
+    # Compute mean and std for no-thinking group  
+    for idx in id2score_nothink:
+        if len(id2score_nothink[idx]) > 1:
+            id2mean[(idx, True)] = torch.mean(torch.tensor(id2score_nothink[idx]))
+            id2std[(idx, True)] = torch.std(torch.tensor(id2score_nothink[idx]))
+        else:
+            # If only one sample, no normalization needed (keep original score)
+            id2mean[(idx, True)] = torch.tensor(0.0)
+            id2std[(idx, True)] = torch.tensor(1.0)
+    
+    # Normalize scores based on their respective groups
+    for i in range(bsz):
+        group_key = (index[i], enforce_nothinking[i].item())
+        if group_key in id2mean:
+            scores[i] = (scores[i] - id2mean[group_key]) / (id2std[group_key] + eps)
+        # If group_key not found, keep original score (shouldn't happen if data is consistent)
 
     returns = scores.unsqueeze(-1) * response_mask
     return returns, returns

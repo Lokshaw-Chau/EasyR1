@@ -68,6 +68,7 @@ class AdvantageEstimator(str, Enum):
 
     GAE = "gae"
     GRPO = "grpo"
+    GRPO_SEP = "grpo_sep"
     REINFORCE_PLUS_PLUS = "reinforce_plus_plus"
     REMAX = "remax"
     RLOO = "rloo"
@@ -142,6 +143,11 @@ def compute_advantage(data: DataProto, adv_estimator: AdvantageEstimator, gamma:
         )
     elif adv_estimator == AdvantageEstimator.GRPO:
         advantages, returns = core_algos.compute_grpo_outcome_advantage(token_level_rewards, response_mask, index)
+    elif adv_estimator == AdvantageEstimator.GRPO_SEP:
+        enforce_nothinking = data.batch["enforce_nothinking"]
+        advantages, returns = core_algos.compute_grpo_sep_outcome_advantage(
+            token_level_rewards, response_mask, index, enforce_nothinking
+        )
     elif adv_estimator == AdvantageEstimator.REINFORCE_PLUS_PLUS:
         advantages, returns = core_algos.compute_reinforce_plus_plus_outcome_advantage(
             token_level_rewards, response_mask, gamma
@@ -239,10 +245,10 @@ class RayPPOTrainer:
                 )
 
         if (
-            config.algorithm.adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.RLOO)
+            config.algorithm.adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.GRPO_SEP, AdvantageEstimator.RLOO)
             and config.worker.rollout.n == 1
         ):
-            raise ValueError("GRPO and RLOO algorithm need `config.worker.rollout.n > 1`.")
+            raise ValueError("GRPO, GRPO_SEP and RLOO algorithm need `config.worker.rollout.n > 1`.")
 
         if config.trainer.max_steps is not None:
             self.training_steps = config.trainer.max_steps
