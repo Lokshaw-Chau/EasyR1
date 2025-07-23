@@ -1,5 +1,6 @@
 import re
 import json
+import math
 
 def calculate_f1_score(predicted_str, ground_truth_str):
     predicted_str=predicted_str.replace("[","").replace("]","")
@@ -165,21 +166,90 @@ def r1gui_accuracy_reward(predict_str: str, ground_truth: str) -> float:
     except Exception as e:
         return 0.0
     
-def compute_score(predict_str: str, ground_truth: str):
+def _compute_score(predict_str: str, ground_truth: str, think_ratio: float = 1.0, training_progress: float = None):
     format = r1gui_format_reward(predict_str)
     accuracy = r1gui_accuracy_reward(predict_str, ground_truth)
-    # calculate how many predict_str contains <think> ... </think>
-    # think_count = len(re.findall(r"<think> ... </think>", predict_str, re.DOTALL))
-
     
+    # Calculate base score
+    base_score = accuracy + format if "<think>" in predict_str else accuracy + format + 0.1  # Add extra score for non-think responses
+    mode_ratio = think_ratio if "<think>" in predict_str else 1 - think_ratio
+    scale_factor = 1 / mode_ratio
+    # Apply progressive scaling based on training progress
+    if training_progress is not None:
+        # AdaGRPO
+        decay = mode_ratio + 0.5 * (1 - mode_ratio) * (1 + math.cos(math.pi * training_progress))
+        overall_score = base_score * scale_factor * decay
+    else:
+        # # Fallback to original behavior when training_progress is not available
+        # overall_score = base_score
+        # extra score for none think
+        overall_score = base_score
+
     return {
-        "overall": accuracy + format,
+        "overall": overall_score,
         "format": format,
         "accuracy": accuracy,
         "think_ratio": 1.0 if "<think>" in predict_str else 0.0,
-        # "think_acc": accuracy*2 if "<think>" in predict_str else 0.0,
-        # "no_think_acc": accuracy*2 if "<think>" not in predict_str else 0.0,
+        "training_progress": training_progress if training_progress is not None else 0.0,
+        "decay": decay if training_progress is not None else 1.0,
+        "think_acc": accuracy*scale_factor if "<think>" in predict_str else 0.0,
+        "no_think_acc": accuracy*scale_factor if "<think>" not in predict_str else 0.0,
     }
+
+def _collapse_penalty(scores, theta):
+    # collapse penalty
+    think_ratio = sum(score["think_ratio"] for score in scores) / len(scores)
+    if think_ratio < theta:
+        for score in scores:
+            if score["think_ratio"]<0.5: # no think
+                score["overall"] = score["overall"] - 2
+    if think_ratio > 1-theta:
+        for score in scores:
+            if score["think_ratio"]>=0.5: # think
+                score["overall"] = score["overall"] - 2
+    
+    return scores
+
+# def _preferential_reward(scores, ground_truths, gamma):
+#     gt2nt_acc={}
+#     gt2t_acc={}
+#     for i, score in enumerate(scores):
+#         ground_truth = ground_truths[i]
+#         if score["think_ratio"] > 0.5:  # think
+#             if ground_truth not in gt2t_acc:
+#                 gt2t_acc[ground_truth] = []
+#             gt2t_acc[ground_truth].append(score["accuracy"])
+#         else:
+#             if ground_truth not in gt2nt_acc:
+#                 gt2nt_acc[ground_truth] = []
+#             gt2nt_acc[ground_truth].append(score["accuracy"])
+
+#     gt2t_acc = {k: sum(v) / len(v) for k, v in gt2t_acc.items()}
+#     gt2nt_acc = {k: sum(v) / len(v) for k, v in gt2nt_acc.items()}
+
+#     for i, score in enumerate(scores):
+#         ground_truth = ground_truths[i]
+#         if gt2t_acc[ground_truth] <= gt2nt_acc[ground_truth]:
+
+def think_ratio(predict_strs: list[str]):
+    """
+    计算 predict_strs 中 <think> ... </think> 的比例。
+    """
+    think_count = sum(1 for s in predict_strs if "<think>" in s)
+    total_count = len(predict_strs)
+    
+    if total_count == 0:
+        return 0.0
+    
+    return think_count / total_count
+def compute_score(predict_strs: list[str], ground_truths: list[str], training_progress: float = None):
+    scores = []
+    current_think_ratio = think_ratio(predict_strs)
+    for predict_str, ground_truth in zip(predict_strs, ground_truths):
+        scores.append(_compute_score(predict_str, ground_truth, current_think_ratio, None))
+
+    scores = _collapse_penalty(scores, 0.3)
+    return scores
 
 # pr=("<think> The command 'What's on the menu at IHOP?' suggests a search for information about the menu at an IHOP restaurant. However, "
 # "the current UI screenshot is a calendar application displaying holidays and significant dates for the month of October and November. There is no direct way to per"

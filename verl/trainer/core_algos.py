@@ -190,7 +190,8 @@ def compute_grpo_sep_outcome_advantage(
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Compute advantage for GRPO with separated thinking/non-thinking groups.
-    Each group (thinking vs non-thinking) computes its own mean and std for normalization.
+    The first token uses standard GRPO (no grouping by thinking/non-thinking).
+    Subsequent tokens use separated groups for normalization.
 
     Args:
         token_level_rewards: `(torch.Tensor)`
@@ -211,51 +212,90 @@ def compute_grpo_sep_outcome_advantage(
             shape: (bs, response_length)
 
     """
+    bsz, seq_len = token_level_rewards.shape
+    print("Separated GRPO with mixed computation")
+    
+    # Initialize advantage tensor
+    advantages = torch.zeros_like(token_level_rewards)
+    
+    # For the first token (t=0): use standard GRPO approach (no separation)
+    # first_token_rewards = token_level_rewards[:, 0]
     scores = token_level_rewards.sum(dim=-1)
-    bsz = scores.shape[0]
+    id2score_first = defaultdict(list)
+    id2mean_overall, id2std_overall = {}, {}
     
-    # Group by both index and enforce_nothinking flag
-    id2score_think = defaultdict(list)      # enforce_nothinking = False (thinking)
-    id2score_nothink = defaultdict(list)    # enforce_nothinking = True (no thinking)
-    id2mean, id2std = {}, {}
-    print("Seperated GRPO")
     for i in range(bsz):
-        if enforce_nothinking[i]:
-            id2score_nothink[index[i]].append(scores[i])
-        else:
-            id2score_think[index[i]].append(scores[i])
+        id2score_first[index[i]].append(scores[i])
     
-    # Compute mean and std for thinking group
-    for idx in id2score_think:
-        assert len(id2score_nothink[idx]) == len(id2score_think[idx]), "Both groups should have the same number of indices."
-        if len(id2score_think[idx]) > 1:
-            id2mean[(idx, False)] = torch.mean(torch.tensor(id2score_think[idx]))
-            id2std[(idx, False)] = torch.std(torch.tensor(id2score_think[idx]))
-        else:
-            # If only one sample, no normalization needed (keep original score)
-            id2mean[(idx, False)] = torch.tensor(0.0)
-            id2std[(idx, False)] = torch.tensor(1.0)
+    for idx in id2score_first:
+        assert len(id2score_first[idx]) > 1, "GRPO needs rollout.n > 1."
+        id2mean_overall[idx] = torch.mean(torch.tensor(id2score_first[idx]))
+        id2std_overall[idx] = torch.std(torch.tensor(id2score_first[idx]))
     
-    # Compute mean and std for no-thinking group  
-    for idx in id2score_nothink:
-        if len(id2score_nothink[idx]) > 1:
-            id2mean[(idx, True)] = torch.mean(torch.tensor(id2score_nothink[idx]))
-            id2std[(idx, True)] = torch.std(torch.tensor(id2score_nothink[idx]))
-        else:
-            # If only one sample, no normalization needed (keep original score)
-            id2mean[(idx, True)] = torch.tensor(0.0)
-            id2std[(idx, True)] = torch.tensor(1.0)
-    
-    # Normalize scores based on their respective groups
+    # Normalize first token using standard GRPO
     for i in range(bsz):
-        group_key = (index[i], enforce_nothinking[i].item())
-        if group_key in id2mean:
-            scores[i] = (scores[i] - id2mean[group_key]) / (id2std[group_key] + eps)
-        # If group_key not found, keep original score (shouldn't happen if data is consistent)
+        advantages[i, 0] = (scores[i] - id2mean_overall[index[i]]) / (id2std_overall[index[i]] + eps)
+    
+    # For subsequent tokens (t>=1): use separated groups approach
+    if seq_len > 1:
+        # subsequent_rewards = token_level_rewards[:, 1:]  # (bs, seq_len-1)
+        subsequent_scores = scores  # (bs,)
+        
+        # Group by both index and enforce_nothinking flag
+        id2score_think = defaultdict(list)      # enforce_nothinking = False (thinking)
+        id2score_nothink = defaultdict(list)    # enforce_nothinking = True (no thinking)
+        id2mean_sep, id2std_sep = {}, {}
+        
+        for i in range(bsz):
+            if enforce_nothinking[i]:
+                id2score_nothink[index[i]].append(subsequent_scores[i])
+            else:
+                id2score_think[index[i]].append(subsequent_scores[i])
+        
+        # Compute mean and std for thinking group
+        for idx in id2score_think:
+            if len(id2score_think[idx]) > 1:
+                id2mean_sep[(idx, False)] = torch.mean(torch.tensor(id2score_think[idx]))
+                id2std_sep[(idx, False)] = torch.std(torch.tensor(id2score_think[idx]))
+            else:
+                # If only one sample, no normalization needed (keep original score)
+                id2mean_sep[(idx, False)] = torch.mean(torch.tensor(id2score_think[idx]))
+                id2std_sep[(idx, False)] = torch.tensor(1.0)
+        
+        # Compute mean and std for no-thinking group  
+        for idx in id2score_nothink:
+            if len(id2score_nothink[idx]) > 1:
+                id2mean_sep[(idx, True)] = torch.mean(torch.tensor(id2score_nothink[idx]))
+                id2std_sep[(idx, True)] = torch.std(torch.tensor(id2score_nothink[idx]))
+            else:
+                # If only one sample, no normalization needed (keep original score)
+                id2mean_sep[(idx, True)] = torch.mean(torch.tensor(id2score_nothink[idx]))
+                id2std_sep[(idx, True)] = torch.tensor(1.0)
+        
+        # Normalize subsequent tokens based on their respective groups
+        normalized_subsequent_scores = torch.zeros_like(subsequent_scores)
+        for i in range(bsz):
+            group_key = (index[i], enforce_nothinking[i].item())
+            # if group_key in id2mean_sep:
+            normalized_subsequent_scores[i] = (subsequent_scores[i] - id2mean_sep[group_key]) / (id2std_sep[group_key] + eps)
+            # else:
+            #     # If group_key not found, keep original score (shouldn't happen if data is consistent)
+            #     print(f"Warning: Group key {group_key} not found in id2mean_sep. Using original score.")
+            #     normalized_subsequent_scores[i] = subsequent_scores[i]
+        advantages[:, 1:] = normalized_subsequent_scores.unsqueeze(-1) * response_mask[:, 1:]
+        # Distribute the normalized subsequent score across subsequent tokens
+        # Use the response mask to only apply to valid tokens
+        # for i in range(bsz):
+        #     for t in range(1, seq_len):
+        #         if response_mask[i, t] > 0:  # Only for valid tokens
+        #             advantages[i, t] = normalized_subsequent_scores[i]
 
-    returns = scores.unsqueeze(-1) * response_mask
-    return returns, returns
-
+    # Apply response mask to final advantages
+    
+    advantages = advantages * response_mask
+    returns = advantages.clone()
+    
+    return advantages, returns
 
 @torch.no_grad()
 def compute_rloo_outcome_advantage(

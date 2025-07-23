@@ -156,7 +156,23 @@ class vLLMRollout(BaseRollout):
                     prompts=vllm_inputs, sampling_params=self.sampling_params, use_tqdm=(self.rank == 0)
                 )
                 response_ids = [output.token_ids for completion in completions for output in completion.outputs]
-                enforce_nothinking = [False] * len(response_ids)
+                # Determine enforce_nothinking based on the first token
+                # 151657 = <tool_call> token (no thinking), 13708 = <think> token (thinking)
+                enforce_nothinking = []
+                for response_id in response_ids:
+                    if len(response_id) > 0:
+                        if response_id[0] == 151657:  # <tool_call>
+                            enforce_nothinking.append(True)
+                        elif response_id[0] == 13708:  # <think>
+                            enforce_nothinking.append(False)
+                        else:
+                            # Default behavior: if neither token, assume thinking mode
+                            enforce_nothinking.append(False)
+                    else:
+                        # Empty response, default to thinking mode
+                        enforce_nothinking.append(False)
+                # print(enforce_nothinking)
+
             
             else:
                 if self.intervention_no_think_n > 0:
