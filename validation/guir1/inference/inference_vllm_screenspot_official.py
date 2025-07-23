@@ -98,12 +98,18 @@ class MultiModalDataset(Dataset):
                 "<tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
             )
         elif self.prompt_type == 'adaptive':
+            # user_query = (
+            #     f"<image>\nThe user query: {text}\n"
+            #     "Output the thinking process in <think></think> tags, and the function call in <tool_call></tool_call> tags as follows:\n"
+            #     "<think> ... </think> <tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
+            #     "or directly output the function call in <tool_call></tool_call> tags as follows:\n"
+            #     "<tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
+            # )
             user_query = (
-                f"<image>\nThe user query: {text}\n"
-                "Output the thinking process in <think></think> tags, and the function call in <tool_call></tool_call> tags as follows:\n"
+                "You may conduct reasoning to help you better solve the problem before output the final answer in <tool_call></tool_call> tags."
+                "The thinking process MUST be surrounded <think></think> tags as follows:\n"
                 "<think> ... </think> <tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
-                "or directly output the function call in <tool_call></tool_call> tags as follows:\n"
-                "<tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
+                f"<image>\nThe user query: {text}\n"
             )
         else:
             raise ValueError(f"Unsupported prompt type: {self.prompt_type}")

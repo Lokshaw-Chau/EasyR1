@@ -84,8 +84,8 @@ def r1gui_format_reward(predict_str: str) -> float:
     并验证 <answer> 中的内容是否符合 [{'action': 'action', 'point': '[x,y]', 'input_text': 'no input text'}] 的格式要求。
     """
     # 检查 <think> 和 <answer> 的外部结构
-    outer_pattern_1 = re.compile(r"<think>.*?</think>\s*<tool_call>.*?</tool_call>", re.DOTALL)
-    outer_pattern_2 = re.compile(r"<tool_call>.*?</tool_call>", re.DOTALL)
+    outer_pattern_1 = re.compile(r"<think>.*?</think>\s*<tool_call>.*?\"action\": \"click\",.*?</tool_call>", re.DOTALL)
+    outer_pattern_2 = re.compile(r"<tool_call>.*?\"action\": \"click\",.*?</tool_call>", re.DOTALL)
     if not re.fullmatch(outer_pattern_1, predict_str) and not re.fullmatch(outer_pattern_2, predict_str):
         return 0.0
 
