@@ -170,8 +170,11 @@ def _compute_score(predict_str: str, ground_truth: str, think_ratio: float = 1.0
     format = r1gui_format_reward(predict_str)
     accuracy = r1gui_accuracy_reward(predict_str, ground_truth)
     
+    base_score = accuracy + format
     # Calculate base score
-    base_score = accuracy + format if "<think>" in predict_str else accuracy + format + 0.1  # Add extra score for non-think responses
+    if accuracy > 0 and "<think>" not in predict_str:
+        base_score += 0.1
+    
     mode_ratio = think_ratio if "<think>" in predict_str else 1 - think_ratio
     scale_factor = 1 / mode_ratio
     # Apply progressive scaling based on training progress
