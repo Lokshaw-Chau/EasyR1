@@ -156,25 +156,21 @@ class vLLMRollout(BaseRollout):
                     prompts=vllm_inputs, sampling_params=self.sampling_params, use_tqdm=(self.rank == 0)
                 )
                 response_ids = [output.token_ids for completion in completions for output in completion.outputs]
-                # Determine enforce_nothinking based on the first token
-                # 151657 = <tool_call> token (no thinking), 13708 = <think> token (thinking)
-                enforce_nothinking = []
-                for response_id in response_ids:
-                    if len(response_id) > 0:
-                        if response_id[0] == 151657:  # <tool_call>
-                            enforce_nothinking.append(True)
-                        elif response_id[0] == 13708:  # <think>
-                            enforce_nothinking.append(False)
-                        else:
-                            # Default behavior: if neither token, assume thinking mode
-                            enforce_nothinking.append(False)
-                    else:
-                        # Empty response, default to thinking mode
-                        enforce_nothinking.append(False)
-                # print(enforce_nothinking)
 
-            
             else:
+                no_intervention_n = self.sampling_params.n - 2 * self.intervention_no_think_n
+                if no_intervention_n > 0:
+                    sampling_params_nointervention = deepcopy(self.sampling_params)
+                    sampling_params_nointervention.n = no_intervention_n
+                    vllm_inputs_nointervention = deepcopy(vllm_inputs)
+                    completions_nointervention = self.llm.generate(
+                        vllm_inputs_nointervention, 
+                        sampling_params=sampling_params_nointervention, 
+                        use_tqdm=(self.rank == 0))
+                else:
+                    completions_nointervention = [[] for _ in range(len(vllm_inputs))]
+
+
                 if self.intervention_no_think_n > 0:
                     sampling_params_nothinking = deepcopy(self.sampling_params)
                     # sampling_params_nothinking.n = self.sampling_params.n // 2
@@ -184,14 +180,15 @@ class vLLMRollout(BaseRollout):
                     vllm_inputs_nothinking = deepcopy(vllm_inputs)
                     for i, ipt in enumerate(vllm_inputs_nothinking):
                         ipt['prompt_token_ids'] = ipt['prompt_token_ids'] + [151657] # "<tool_call>" token id
-                    outputs_nothinking = self.inference_engine.generate(
+                    completions_nothinking = self.inference_engine.generate(
                         prompts=vllm_inputs_nothinking,  # because we have already convert it to prompt token id
                         sampling_params=sampling_params_nothinking,
                         use_tqdm=(self.rank == 0))
                 else:
-                    outputs_nothinking = [[] for _ in range(len(vllm_inputs))]
+                    completions_nothinking = [[] for _ in range(len(vllm_inputs))]
                 
-                intervention_think_n = self.sampling_params.n - self.intervention_no_think_n
+                # intervention_think_n = self.sampling_params.n - self.intervention_no_think_n
+                intervention_think_n = self.intervention_no_think_n
                 if intervention_think_n > 0:
                     sampling_params_thinking = deepcopy(self.sampling_params)
                     sampling_params_thinking.n = intervention_think_n
@@ -201,33 +198,50 @@ class vLLMRollout(BaseRollout):
                     for i, ipt in enumerate(vllm_inputs_thinking):
                         # ipt['prompt_token_ids'] = ipt['prompt_token_ids'] + [13708, 766, 29]
                         ipt['prompt_token_ids'] = ipt['prompt_token_ids'] + [13708]
-                    outputs_thinking = self.inference_engine.generate(
+                    completions_thinking = self.inference_engine.generate(
                         prompts=vllm_inputs_thinking,  # because we have already convert it to prompt token id
                         sampling_params=sampling_params_thinking,
                         use_tqdm=(self.rank == 0))
                 else:
-                    outputs_thinking = [[] for _ in range(len(vllm_inputs))]
+                    completions_thinking = [[] for _ in range(len(vllm_inputs))]
                 
                 response_ids = []
-                enforce_nothinking = []
-                assert len(outputs_nothinking) == len(outputs_thinking), f"{len(outputs_nothinking)} != {len(outputs_thinking)}"
-                for output_nothinking, output_thinking in zip(outputs_nothinking, outputs_thinking):
-                    if output_thinking != []:
-                        for sample_id in range(len(output_thinking.outputs)):
-                            # enforce_nothinking.append(True)
-                            enforce_nothinking.append(False)
-                            response_ids.append([13708] + output_thinking.outputs[sample_id].token_ids)
+                assert len(completions_nothinking) == len(completions_thinking) == len(completions_nointervention), f"{len(completions_nothinking)} != {len(completions_thinking)}"
+                for completion_nointervention, completion_nothinking, completion_thinking in zip(
+                    completions_nointervention, completions_nothinking, completions_thinking
+                ):
+                    if completion_thinking != []:
+                        for sample_id in range(len(completion_thinking.outputs)):
+                            response_ids.append([13708] + completion_thinking.outputs[sample_id].token_ids)
                     else:
                         print("No thinking output!")
-                    if output_nothinking != []:
-                        for sample_id in range(len(output_nothinking.outputs)):
-                            enforce_nothinking.append(True)
-                            # response.append(output_nothinking.outputs[sample_id].token_ids)
-                            response_ids.append([151657] + output_nothinking.outputs[sample_id].token_ids)
+                    if completion_nothinking != []:
+                        for sample_id in range(len(completion_nothinking.outputs)):
+                            response_ids.append([151657] + completion_nothinking.outputs[sample_id].token_ids)
                     else:
                         print("No not thinking output!")
+                    if completion_nointervention != []:
+                        for sample_id in range(len(completion_nointervention.outputs)):
+                            response_ids.append(completion_nointervention.outputs[sample_id].token_ids)
+                    else:
+                        print("No no intervention output!")
                 
-            
+            enforce_nothinking = []
+            for response_id in response_ids:
+                if len(response_id) > 0:
+                    if response_id[0] == 151657:  # <tool_call>
+                        enforce_nothinking.append(True)
+                    elif response_id[0] == 13708:  # <think>
+                        enforce_nothinking.append(False)
+                    else:
+                        # Default behavior: if neither token, assume thinking mode
+                        enforce_nothinking.append(False)
+                        print(f"Unexpected first token {response_id[0]} in response_ids, defaulting to thinking mode.")
+                else:
+                    # Empty response, default to thinking mode
+                    print("Empty response_ids, defaulting to thinking mode.")
+                    enforce_nothinking.append(False)
+
             response_ids = VF.pad_2d_list_to_length(
                     response_ids, self.pad_token_id, max_length=self.config.response_length
                 ).to(input_ids.device)
@@ -238,7 +252,7 @@ class vLLMRollout(BaseRollout):
                 input_ids = _repeat_interleave(input_ids, self.sampling_params.n)
                 attention_mask = _repeat_interleave(attention_mask, self.sampling_params.n)
                 position_ids = _repeat_interleave(position_ids, self.sampling_params.n)
-
+        
         sequence_ids = torch.cat([input_ids, response_ids], dim=-1)
         response_length = response_ids.size(1)
         delta_position_id = torch.arange(1, response_length + 1, device=position_ids.device)

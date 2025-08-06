@@ -294,10 +294,10 @@ class DataParallelPPOActor(BasePPOActor):
                     force_no_think_resp_entropy = -VF.masked_mean(
                         log_probs[enforce_nothinking, 1:], response_mask[enforce_nothinking, 1:]
                     )
-                    first_eot_logprobs = log_probs[enforce_nothinking, 0]
-                    first_eot_probs = first_eot_logprobs.exp()
-                    first_t_logprobs = log_probs[~enforce_nothinking, 0]
-                    first_t_probs = first_t_logprobs.exp()
+                    # first_eot_logprobs = log_probs[enforce_nothinking, 0]
+                    # first_eot_probs = first_eot_logprobs.exp()
+                    # first_t_logprobs = log_probs[~enforce_nothinking, 0]
+                    # first_t_probs = first_t_logprobs.exp()
 
                     pg_loss, pg_clipfrac_higher, pg_clipfrac_lower, ppo_kl, cond_loss, resp_loss = core_algos.compute_policy_loss(
                         old_log_probs=old_log_probs,
@@ -317,11 +317,22 @@ class DataParallelPPOActor(BasePPOActor):
                             ref_log_probs=ref_log_probs,
                             kl_penalty=self.config.kl_penalty,
                         )
-                        kl_loss = VF.masked_mean(kld, response_mask)
-                        pg_loss = pg_loss + kl_loss * self.config.kl_coef
-                        metrics["actor/kl_loss"] = kl_loss.detach().item()
+                        mode_mask = response_mask.clone()
+                        mode_mask[:, 1:] = 0
+                        resp_mask = response_mask.clone()
+                        resp_mask[:, 0] = 0
+                        mode_kl_loss = (kld * mode_mask).sum() / (response_mask.sum() + 1e-8)
+                        resp_kl_loss = (kld * resp_mask).sum() / (response_mask.sum() + 1e-8)
+                        metrics["actor/mode_kl_loss"] = mode_kl_loss.detach().item()
+                        metrics["actor/resp_kl_loss"] = resp_kl_loss.detach().item()
+                        metrics["actor/kl_loss"] = (mode_kl_loss + resp_kl_loss).detach().item()
                         metrics["actor/kl_coef"] = self.config.kl_coef
-
+                        # kl_loss = mode_kl_loss * self.config.mode_kl_coef + resp_kl_loss
+                        if self.config.mode_kl_coef > 0:
+                            pg_loss = pg_loss + mode_kl_loss * self.config.mode_kl_coef + resp_kl_loss * self.config.kl_coef
+                        else:
+                            pg_loss = pg_loss + (resp_kl_loss + mode_kl_loss) * self.config.kl_coef
+                            
                     if self.calculate_entropy:
                         pg_loss = pg_loss - mode_entropy.mean() * self.config.entropy_bonus_alpha
                         metrics["actor/mode_entropy"] = mode_entropy.mean().detach().item()
@@ -341,15 +352,15 @@ class DataParallelPPOActor(BasePPOActor):
                         "actor/ppo_kl": ppo_kl.detach().item(),
                         "actor/cond_loss": cond_loss.mean().detach().item(),
                     }
-                    if len(first_eot_probs) > 0:
-                        batch_metrics['adapt_think/first_eot_token_probs/mean'] = first_eot_probs.mean().detach().item()
-                        batch_metrics["actor/force_no_think_resp_entropy"] = force_no_think_resp_entropy.detach().item()
-                        batch_metrics["actor/resp_loss_no_think/mean"] = resp_loss[enforce_nothinking].mean().detach().item()
+                    # if len(first_eot_probs) > 0:
+                        # batch_metrics['adapt_think/first_eot_token_probs/mean'] = first_eot_probs.mean().detach().item()
+                    batch_metrics["actor/force_no_think_resp_entropy"] = force_no_think_resp_entropy.detach().item()
+                    batch_metrics["actor/resp_loss_no_think/mean"] = resp_loss[enforce_nothinking].mean().detach().item()
 
-                    if len(first_t_probs) > 0:
-                        batch_metrics['adapt_think/first_t_token_probs/mean'] = first_t_probs.mean().detach().item()
-                        batch_metrics["actor/force_think_resp_entropy"] = force_think_resp_entropy.detach().item()
-                        batch_metrics["actor/resp_loss_think/mean"] = resp_loss[~enforce_nothinking].mean().detach().item()
+                    # if len(first_t_probs) > 0:
+                        # batch_metrics['adapt_think/first_t_token_probs/mean'] = first_t_probs.mean().detach().item()
+                    batch_metrics["actor/force_think_resp_entropy"] = force_think_resp_entropy.detach().item()
+                    batch_metrics["actor/resp_loss_think/mean"] = resp_loss[~enforce_nothinking].mean().detach().item()
 
                     append_to_dict(metrics, batch_metrics)
 

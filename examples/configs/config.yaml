@@ -22,6 +22,7 @@ algorithm:
   use_kl_loss: false
   kl_penalty: low_var_kl
   kl_coef: 1.0e-2
+  mode_kl_coef: 1.0e-1
   think_alpha: -1 # -1 to disable
   entropy_from_logits_with_chunking: false
 worker:

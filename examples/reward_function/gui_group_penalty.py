@@ -255,7 +255,7 @@ def compute_score(predict_strs: list[str], ground_truths: list[str], training_pr
     for predict_str, ground_truth in zip(predict_strs, ground_truths):
         scores.append(_compute_score(predict_str, ground_truth, current_think_ratio, None))
 
-    scores = _batch_wise_penalty_reward(scores, ground_truths, 0.2)
+    scores = _group_wise_collapse_penalty(scores, ground_truths, 0.2)
     return scores
 
 # pr=("<think> The command 'What's on the menu at IHOP?' suggests a search for information about the menu at an IHOP restaurant. However, "

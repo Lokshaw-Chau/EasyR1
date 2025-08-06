@@ -67,6 +67,7 @@ class AlgorithmConfig:
     use_kl_loss: bool = False
     kl_penalty: str = "kl"
     kl_coef: float = 1e-3
+    mode_kl_coef: float = 1e-3
     kl_type: str = "fixed"
     kl_horizon: float = 0.0
     kl_target: float = 0.0
@@ -116,6 +117,7 @@ class PPOConfig:
         self.worker.actor.use_kl_loss = self.algorithm.use_kl_loss
         self.worker.actor.kl_penalty = self.algorithm.kl_penalty
         self.worker.actor.kl_coef = self.algorithm.kl_coef
+        self.worker.actor.mode_kl_coef = self.algorithm.mode_kl_coef
         self.worker.actor.think_alpha = self.algorithm.think_alpha
 
     def deep_post_init(self):
