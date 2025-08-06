@@ -173,7 +173,7 @@ def _compute_score(predict_str: str, ground_truth: str, think_ratio: float = 1.0
     base_score = accuracy + format
     # Calculate base score
     if accuracy > 0 and "<think>" not in predict_str:
-        base_score += 0.1
+        base_score += 0.2
     
     mode_ratio = think_ratio if "<think>" in predict_str else 1 - think_ratio
     scale_factor = 1 / mode_ratio
@@ -199,18 +199,31 @@ def _compute_score(predict_str: str, ground_truth: str, think_ratio: float = 1.0
         "no_think_acc": accuracy*scale_factor if "<think>" not in predict_str else 0.0,
     }
 
-def _collapse_penalty(scores, theta):
-    # collapse penalty
-    think_ratio = sum(score["think_ratio"] for score in scores) / len(scores)
-    if think_ratio < theta:
-        for score in scores:
-            if score["think_ratio"]<0.5: # no think
-                score["overall"] = score["overall"] - 2
-    if think_ratio > 1-theta:
-        for score in scores:
-            if score["think_ratio"]>=0.5: # think
-                score["overall"] = score["overall"] - 2
-    
+def _collapse_penalty(scores, ground_truths, theta):
+    # group-wise collapse penalty
+    # think_ratio = sum(score["think_ratio"] for score in scores) / len(scores)
+    gt2tr_list = {}
+    for i, score in enumerate(scores):
+        ground_truth = ground_truths[i]
+        if ground_truth not in gt2tr_list:
+            gt2tr_list[ground_truth] = []
+        gt2tr_list[ground_truth].append(score["think_ratio"])
+
+    gt2tr = {k: sum(v) / len(v) for k, v in gt2tr_list.items()}
+    print("gt2tr:", gt2tr)
+
+    for i, score in enumerate(scores):
+        tr = gt2tr[ground_truths[i]] 
+
+        if tr < theta:
+            for score in scores:
+                if score["think_ratio"]<0.5: # no think
+                    score["overall"] = score["overall"] - 2
+        if tr > 1-theta:
+            for score in scores:
+                if score["think_ratio"]>=0.5: # think
+                    score["overall"] = score["overall"] - 2
+        
     return scores
 
 # def _preferential_reward(scores, ground_truths, gamma):
@@ -251,7 +264,7 @@ def compute_score(predict_strs: list[str], ground_truths: list[str], training_pr
     for predict_str, ground_truth in zip(predict_strs, ground_truths):
         scores.append(_compute_score(predict_str, ground_truth, current_think_ratio, None))
 
-    scores = _collapse_penalty(scores, 0.3)
+    scores = _collapse_penalty(scores, ground_truths, 0.2)
     return scores
 
 # pr=("<think> The command 'What's on the menu at IHOP?' suggests a search for information about the menu at an IHOP restaurant. However, "
