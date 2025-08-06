@@ -173,7 +173,7 @@ def _compute_score(predict_str: str, ground_truth: str, think_ratio: float = 1.0
     base_score = accuracy + format
     # Calculate base score
     if accuracy > 0 and "<think>" not in predict_str:
-        base_score += 0.2
+        base_score += 0.1
     
     mode_ratio = think_ratio if "<think>" in predict_str else 1 - think_ratio
     scale_factor = 1 / mode_ratio
@@ -255,7 +255,7 @@ def compute_score(predict_strs: list[str], ground_truths: list[str], training_pr
     for predict_str, ground_truth in zip(predict_strs, ground_truths):
         scores.append(_compute_score(predict_str, ground_truth, current_think_ratio, None))
 
-    scores = _batch_wise_penalty_reward(scores, ground_truths, 0.2)
+    scores = _batch_wise_penalty_reward(scores, ground_truths, 0.1)
     return scores
 
 # pr=("<think> The command 'What's on the menu at IHOP?' suggests a search for information about the menu at an IHOP restaurant. However, "
