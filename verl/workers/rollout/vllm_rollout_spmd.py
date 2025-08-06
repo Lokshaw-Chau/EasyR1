@@ -163,7 +163,7 @@ class vLLMRollout(BaseRollout):
                     sampling_params_nointervention = deepcopy(self.sampling_params)
                     sampling_params_nointervention.n = no_intervention_n
                     vllm_inputs_nointervention = deepcopy(vllm_inputs)
-                    completions_nointervention = self.llm.generate(
+                    completions_nointervention = self.inference_engine.generate(
                         vllm_inputs_nointervention, 
                         sampling_params=sampling_params_nointervention, 
                         use_tqdm=(self.rank == 0))
