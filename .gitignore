@@ -175,6 +175,7 @@ outputs/
 checkpoints/
 wandb/
 ckpts/
+data/
 
 _*.yaml
 _*.sh
