@@ -327,11 +327,8 @@ class DataParallelPPOActor(BasePPOActor):
                         metrics["actor/resp_kl_loss"] = resp_kl_loss.detach().item()
                         metrics["actor/kl_loss"] = (mode_kl_loss + resp_kl_loss).detach().item()
                         metrics["actor/kl_coef"] = self.config.kl_coef
-                        # kl_loss = mode_kl_loss * self.config.mode_kl_coef + resp_kl_loss
-                        if self.config.mode_kl_coef > 0:
-                            pg_loss = pg_loss + mode_kl_loss * self.config.mode_kl_coef + resp_kl_loss * self.config.kl_coef
-                        else:
-                            pg_loss = pg_loss + (resp_kl_loss + mode_kl_loss) * self.config.kl_coef
+                        pg_loss = pg_loss + mode_kl_loss * self.config.mode_kl_coef + resp_kl_loss * self.config.kl_coef
+
                             
                     if self.calculate_entropy:
                         pg_loss = pg_loss - mode_entropy.mean() * self.config.entropy_bonus_alpha
