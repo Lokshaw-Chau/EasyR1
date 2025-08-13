@@ -151,7 +151,7 @@ class vLLMRollout(BaseRollout):
         # print(f"vLLM inputs: {vllm_inputs}.")
         # users can customize different sampling_params at different run
         with self.update_sampling_params(**prompts.meta_info):
-            if not self.rollout_intervention:
+            if not self.rollout_intervention or self.sampling_params.n == 1:
                 completions: List[RequestOutput] = self.inference_engine.generate(
                     prompts=vllm_inputs, sampling_params=self.sampling_params, use_tqdm=(self.rank == 0)
                 )
