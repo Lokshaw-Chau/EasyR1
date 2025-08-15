@@ -485,8 +485,14 @@ def compute_policy_loss(
         final_pg_loss = thinkless_alpha * cond_loss + resp_loss
     else: 
         final_pg_loss = VF.masked_mean(final_pg_loss, response_mask)
-    pg_clipfrac_higher = VF.masked_mean(pg_clipfrac_higher, response_mask)
-    pg_clipfrac_lower = VF.masked_mean(pg_clipfrac_lower, response_mask)
+    pg_clipfrac_higher_all = VF.masked_mean(pg_clipfrac_higher, response_mask)
+    pg_clipfrac_higher_mode = VF.masked_mean(pg_clipfrac_higher, cond_mask)
+    pg_clipfrac_lower_all = VF.masked_mean(pg_clipfrac_lower, response_mask)
+    pg_clipfrac_lower_mode = VF.masked_mean(pg_clipfrac_lower, cond_mask)
+
+    pg_clipfrac_higher = [pg_clipfrac_higher_all, pg_clipfrac_higher_mode]
+    pg_clipfrac_lower = [pg_clipfrac_lower_all, pg_clipfrac_lower_mode]
+
     ppo_kl = VF.masked_mean(-negative_approx_kl, response_mask)
     return final_pg_loss, pg_clipfrac_higher, pg_clipfrac_lower, ppo_kl, cond_loss_for_log, resp_loss_for_log
 
