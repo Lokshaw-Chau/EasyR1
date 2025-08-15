@@ -343,8 +343,10 @@ class DataParallelPPOActor(BasePPOActor):
 
                     batch_metrics = {
                         "actor/pg_loss": pg_loss.detach().item(),
-                        "actor/pg_clipfrac_higher": pg_clipfrac_higher.detach().item(),
-                        "actor/pg_clipfrac_lower": pg_clipfrac_lower.detach().item(),
+                        "actor/pg_clipfrac_higher": pg_clipfrac_higher[0].detach().item(),
+                        "actor/pg_clipfrac_lower": pg_clipfrac_lower[0].detach().item(),
+                        "actor/pg_clipfrac_higher_mode": pg_clipfrac_higher[1].detach().item(),
+                        "actor/pg_clipfrac_lower_mode": pg_clipfrac_lower[1].detach().item(),
                         # "actor/entropy_bonus": entropy_bonus.detach().item(),
                         "actor/ppo_kl": ppo_kl.detach().item(),
                         "actor/cond_loss": cond_loss.mean().detach().item(),
