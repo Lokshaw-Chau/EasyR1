@@ -282,10 +282,12 @@ def main(args):
     DATA_PATH=args.data_path
     if DATA_PATH.endswith('.parquet'):
         data=load_dataset("parquet", data_files=DATA_PATH, split="train")
+        # Filter out refusal data for parquet files
+        data = data.filter(lambda x: x['box_type'] != 'refusal')
     else:
         data = [json.loads(s) for s in open(DATA_PATH, "r")] if DATA_PATH.endswith(".jsonl") else json.load(open(DATA_PATH,"r"))
-    # drop data if data['box_type'] == 'refusal'
-    data = [d for d in data if d['box_type'] != 'refusal']
+        # drop data if data['box_type'] == 'refusal'
+        data = [d for d in data if d['box_type'] != 'refusal']
     
     
     # 输出路径

@@ -62,11 +62,11 @@ def evaluate(args):
         pred_x,pred_y=pred['pred_coord'][:2]
         score_dict[category+"_"+"full"] += 1
         score_dict[group+"_"+"full"] += 1
-        if ground_truth['box_type'] == 'bbox':
+        if gt['box_type'] == 'bbox':
             if gt_bbox[0]<pred_x<gt_bbox[0]+gt_bbox[2] and gt_bbox[1]<pred_y<gt_bbox[1]+gt_bbox[3]:
                 score_dict[category] += 1
                 score_dict[group] += 1
-        elif ground_truth['box_type'] == 'polygon':
+        elif gt['box_type'] == 'polygon':
             x, y = pred_x, pred_y
             polygon = gt_bbox
             n = len(polygon) // 2
@@ -88,7 +88,7 @@ def evaluate(args):
                 score_dict[category] += 1
                 score_dict[group] += 1
 
-    all =  sum([score_dict[k] for k in score_dict.keys() if not k.endswith("full") and '-' in k]) / sum([score_dict[k] for k in score_dict.keys() if k.endswith("full") and '-' in k]) * 100
+    all =  sum([score_dict[k] for k in score_dict.keys() if not k.endswith("full") and '-' in k]) / 564 * 100
     logger.info(f"Average Score: {all}")
 
     for key in [k for k in score_dict.keys() if not k.endswith("full")]:
