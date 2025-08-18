@@ -62,9 +62,11 @@ class vLLMRollout(BaseRollout):
         self.pad_token_id = tokenizer.pad_token_id
         self.rollout_intervention = config.rollout_intervention
         self.intervention_no_think_n = config.intervention_no_think_n
-        if self.intervention_no_think_n > self.config.n:
+        self.intervention_think_n = config.intervention_think_n
+        if self.intervention_no_think_n + self.intervention_think_n > self.config.n:
             raise ValueError(
-                f"intervention_no_think_n {self.intervention_no_think_n} should be less than n {self.config.n}."
+                f"intervention_no_think_n + intervention_think_n should be less than or equal to n, "
+                f"but got {self.intervention_no_think_n} + {self.intervention_think_n} > {self.config.n}."
             )
         if config.tensor_parallel_size > torch.distributed.get_world_size():
             raise ValueError("Tensor parallelism size should be less than world size.")
@@ -158,7 +160,7 @@ class vLLMRollout(BaseRollout):
                 response_ids = [output.token_ids for completion in completions for output in completion.outputs]
 
             else:
-                no_intervention_n = self.sampling_params.n - 2 * self.intervention_no_think_n
+                no_intervention_n = self.sampling_params.n - self.intervention_no_think_n - self.intervention_think_n
                 if no_intervention_n > 0:
                     sampling_params_nointervention = deepcopy(self.sampling_params)
                     sampling_params_nointervention.n = no_intervention_n
@@ -187,11 +189,9 @@ class vLLMRollout(BaseRollout):
                 else:
                     completions_nothinking = [[] for _ in range(len(vllm_inputs))]
                 
-                # intervention_think_n = self.sampling_params.n - self.intervention_no_think_n
-                intervention_think_n = self.intervention_no_think_n
-                if intervention_think_n > 0:
+                if self.intervention_think_n > 0:
                     sampling_params_thinking = deepcopy(self.sampling_params)
-                    sampling_params_thinking.n = intervention_think_n
+                    sampling_params_thinking.n = self.intervention_think_n
                     # enforce the first token to be "<think>"
                     sampling_params_thinking.max_tokens = self.sampling_params.max_tokens - 1
                     vllm_inputs_thinking = deepcopy(vllm_inputs)
