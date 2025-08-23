@@ -20,12 +20,11 @@ from qwen_agent.llm.fncall_prompts.nous_fncall_prompt import (
     ContentItem,
 )
 from qwen_vl_utils import smart_resize
-from utils.agent_function_call import GUIAction
+from utils.agent_function_call import MobileUse
 import copy
 import base64
 import time
-
-# 初始化 Ray - handle existing clusters gracefully
+# 初始化 Ray
 def initialize_ray():
     """Initialize Ray with proper error handling"""
     max_retries = 3
@@ -62,24 +61,46 @@ if not initialize_ray():
 MODEL_PATH = ""
 
 # 推理参数
-# SAMPLING_PARAMS = SamplingParams(
-#     temperature=0.0,
-#     top_p=0.001,
-#     repetition_penalty=1.05,
-#     max_tokens=1024,  # 根据需要调整最大生成长度
-#     stop_token_ids=[],  # 停止标志
-# )
-
+SAMPLING_PARAMS = SamplingParams(
+    temperature=0.0,
+    top_p=0.001,
+    repetition_penalty=1.05,
+    max_tokens=1024,  # 根据需要调整最大生成长度
+    stop_token_ids=[],  # 停止标志
+)
 # 数据路径
 DATA_PATH = ""
 
 # 微批大小
-MICRO_BATCH = 12
+MICRO_BATCH = 24
+
+def extract_action(content):
+    # answer_tag_pattern = r'<tool_call>(.*?)</tool_call>'
+    action_pattern = r"\"action\":\s*\"(\w+)\""
+    # content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
+    # if content_answer_match:
+        # content_answer = content_answer_match.group(1).strip()
+    action_match = re.search(action_pattern, content)
+    if action_match:
+        return action_match.group(1)
+    return None
+
+def extract_input_text(content):
+    # answer_tag_pattern = r'<tool_call>(.*?)</tool_call>'
+    action_pattern = r"\"text\":\s*\"(.*?)\""
+    # content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
+    # if content_answer_match:
+    #     content_answer = content_answer_match.group(1).strip()
+    action_match = re.search(action_pattern, content)
+    if action_match:
+        return action_match.group(1)
+    return "no input text"
+
 
 def extract_coord(content):
     # Try to find the bbox within <answer> tags, if can not find, return [0, 0, 0, 0]
     # answer_tag_pattern = r'<tool_call>(.*?)</tool_call>'
-    bbox_pattern = r'\{.*\[(\d+),\s*(\d+)]\s*.*\}'
+    bbox_pattern = r'\"coordinate\": \[(\d+),\s*(\d+)\]'
     # content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
     try:
         # if content_answer_match:
@@ -98,37 +119,59 @@ def extract_coord(content):
     except:
         return [0, 0, 0, 0], False
     
+# def extract_coord2(content):
+#     # Try to find the bbox within <answer> tags, if can not find, return [0, 0, 0, 0]
+#     # answer_tag_pattern = r'<tool_call>(.*?)</tool_call>'
+#     bbox_pattern = r'\"coordinate2\": \[(\d+),\s*(\d+)\]'
+#     # content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
+#     try:
+#         # if content_answer_match:
+#         #     content_answer = content_answer_match.group(1).strip()
+#         coord_match = re.search(bbox_pattern, content)
+#         if coord_match:
+#             coord = [int(coord_match.group(1)), int(coord_match.group(2))]
+#             return coord, True
+#         else:
+#             coord_pattern = r'\{.*\((\d+),\s*(\d+))\s*.*\}'
+#             coord_match = re.search(coord_pattern, content)
+#             if coord_match:
+#                 coord = [int(coord_match.group(1)), int(coord_match.group(2))]
+#                 return coord, True
+#         return [0, 0, 0, 0], False
+#     except:
+
+#         return [0, 0, 0, 0], False
+    
 class MultiModalDataset(Dataset):
-    def __init__(self, data, processor):
+    def __init__(self, data, processor, prefix=None,):
         self.data = data
         self.processor = processor
         self.processor.max_pixels=1258291
+        self.prefix = prefix if prefix else ""
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        """返回单个样本，包含预处理后的数据"""
         sample = self.data[idx]
         image = sample["image"]
-        # image = Image.open(BytesIO(image["bytes"]))
         dummy_image = Image.open(BytesIO(image["bytes"]))
-        # image = copy.deepcopy(dummy_image)
         text = sample["instruction"]
+        # history="None" if 'history' not in sample else sample['history']
 
+        # sys_prompt='''A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process and answer are enclosed within <think> </think> nd <answer> </answer> tags, respectively, i.e., <think> reasoning process here </think><answer> answer here </answer>'''
         user_query = (
-            "You may conduct reasoning to help you better solve the problem before output the final answer in <tool_call></tool_call> tags."
-            "The thinking process MUST be surrounded <think></think> tags as follows:\n"
-            "<think> ... </think> <tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
-            f"<image>\nThe user query: {text}\n"
-        )
-
+                "You may conduct reasoning to help you better solve the problem before output the final answer in <tool_call></tool_call> tags."
+                "The thinking process MUST be surrounded <think></think> tags as follows:\n"
+                "<think> ... </think> <tool_call>{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"...\", ...}}</tool_call>\n"
+                f"<image>\nThe user query: {text}\n"
+            )
         resized_height, resized_width  = smart_resize(dummy_image.height,
             dummy_image.width,
             factor=self.processor.image_processor.patch_size * self.processor.image_processor.merge_size,
             min_pixels=self.processor.image_processor.min_pixels,
             max_pixels=self.processor.image_processor.max_pixels,)
-        screenspot = GUIAction(
+        screenspot = MobileUse(
             cfg={"display_width_px": resized_width, "display_height_px": resized_height}
         )
         img_bytes = image["bytes"]
@@ -176,7 +219,7 @@ class MultiModalDataset(Dataset):
             tokenize=False,
             add_generation_prompt=True,
         )
-
+        prompt += self.prefix
         # prompt.replace("<|vision_start|><|image_pad|><|vision_end|>","")
         # prompt.replace("<image>","<|vision_start|><|image_pad|><|vision_end|>")
 
@@ -236,98 +279,49 @@ def custom_collate_fn(batch):
 @ray.remote(num_gpus=1)
 class Worker:
     def __init__(self, model_path, sampling_params, output_path=None):
-        self.llm = LLM(
-            model=model_path,
-            limit_mm_per_prompt={"image": 1, "video": 1},
-        )
+        # self.llm = LLM(
+        #     model=model_path,
+        #     limit_mm_per_prompt={"image": 1, "video": 1},
+        # )
         self.sampling_params = sampling_params
         self.output_path = output_path
+        # self.answer_file = model_path
+        ans_file = output_path.replace('.json', '_bug.json')
+        with open(ans_file, "r") as f:
+            self.answer_file = [json.loads(line) for line in f]
+        self.id2answer = {f"{item['instruction']}_{item['gt_action']}_{item['gt_bbox']}_{item['gt_input_text']}": item['pred'] for item in self.answer_file}
 
     def process_data(self, dataloader):
-        results = []
+
 
         for batch in tqdm(dataloader):
-            batch_results = []
+            results = []
             prompts = batch["prompts"]
             multi_modal_data = batch["multi_modal_data"]
             mm_processor_kwargs = batch["mm_processor_kwargs"]
             original_samples = batch["original_samples"]
 
-            for prefix in ['<think>', '<tool_call>']:
+            # 保存结果
+            for original_sample in original_samples:
+                # generated_text = output.outputs[0].text
+                # print(generated_text)
+                # gt_bbox = original_sample["gt_bbox"]
+                generated_text = self.id2answer.get(f"{original_sample['instruction']}_{original_sample['gt_action']}_{original_sample['gt_bbox']}_{original_sample['gt_input_text']}", "")
+                original_sample["pred"] = generated_text
+                pred_coord, _ = extract_coord(generated_text)
+                original_sample["pred_coord"] = [pred_coord[0]*original_sample["scale"][0],pred_coord[1]*original_sample["scale"][1]]
+                pred_action = extract_action(generated_text)
+                original_sample["pred_action"] = pred_action
+                original_sample["pred_input_text"]=extract_input_text(generated_text)
+                # print(original_sample["pred_input_text"],original_sample["gt_input_text"])
+                original_sample["scale"]= original_sample["scale"]
+                original_sample["image"]=''
+                results.append(original_sample)
 
-                llm_inputs = [
-                    {
-                        "prompt": prompt+prefix,
-                        "multi_modal_data": mm_data,
-                        "mm_processor_kwargs": mm_kwargs,
-                    }
-                    for prompt, mm_data, mm_kwargs in zip(prompts, multi_modal_data, mm_processor_kwargs)
-                ]
-
-                # 执行推理
-                outputs = self.llm.generate(llm_inputs, sampling_params=self.sampling_params, use_tqdm=True)
-
-                # 保存结果
-                
-                for original_sample, output in zip(original_samples, outputs):
-                    # one_pass = False
-                    # one_fail = False
-                    flags = []
-                    generated_texts = []
-                    # texts = [output.outputs[i].text for i in range(len(output.outputs))]
-                    # print(texts)
-                    gt_bbox = original_sample["gt_bbox"]
-                    for i in range(len(output.outputs)):
-
-                        generated_text = output.outputs[i].text
-                        generated_texts.append(generated_text)
-                        # original_sample["pred"] = generated_text
-                        pred_coord, _ = extract_coord(generated_text)
-                        pred_coord = [pred_coord[0]*original_sample["scale"][0],pred_coord[1]*original_sample["scale"][1]]
-                        # print(pred_coord, gt_bbox)
-                        if 'box_type' in original_sample.keys():
-                            if original_sample['box_type'] == 'bbox':
-                                if gt_bbox[0]<pred_coord[0]<gt_bbox[0]+gt_bbox[2] and gt_bbox[1]<pred_coord[1]<gt_bbox[1]+gt_bbox[3]:
-                                    flags.append(True)
-                                else:
-                                    flags.append(False)
-                            elif original_sample['box_type'] == 'polygon':
-                                x, y = pred_coord[0], pred_coord[1]
-                                polygon = gt_bbox
-                                n = len(polygon) // 2
-                                inside = False
-
-                                j = n - 1
-                                for i in range(n):
-                                    xi, yi = polygon[i * 2], polygon[i * 2 + 1]
-                                    xj, yj = polygon[j * 2], polygon[j * 2 + 1]
-
-                                    if (yi > y) != (yj > y) and x < (xj - xi) * (y - yi) / (yj - yi) + xi:
-                                        inside = not inside
-                                    j = i
-                                
-                                flags.append(inside)
-
-                        else:
-                            if gt_bbox[0] < pred_coord[0] < gt_bbox[2] and gt_bbox[1] < pred_coord[1] < gt_bbox[3]:
-                                # print(generated_text, "pass")
-                                flags.append(True)
-                                # one_pass = True
-                            else:
-                                flags.append(False)
-                        # original_sample["pred_coord"] = pred_coord
-                    original_sample[f"{prefix}_pred"] = generated_texts
-                    original_sample[f"{prefix}_pass"] = flags
-                    original_sample["image"]=''
-                    if prefix == '<tool_call>':
-                        # results.append(original_sample)
-                        batch_results.append(original_sample)
-                    # results.append(original_sample)
-                    # print(original_sample)
-            
-            with open(self.output_path, "a") as ans_file:
-                for sample in batch_results:
-                    ans_file.write(json.dumps(sample) + "\n")
+            print(f"writing results to file...{self.output_path}")
+            with open(self.output_path, "a") as f:
+                for result in results:
+                    f.write(json.dumps(result) + "\n")
 
         return results
 
@@ -336,20 +330,19 @@ def main(args):
     # 将数据分成 8 份
     MODEL_PATH=args.model_path
     DATA_PATH=args.data_path
-    if DATA_PATH.endswith('parquet'):
+    if DATA_PATH.endswith('.parquet'):
         data=load_dataset("parquet", data_files=DATA_PATH, split="train")
-        if 'box_type' in data.column_names:
-            data = data.filter(lambda x: x['box_type'] != 'refusal')
     else:
         data = [json.loads(s) for s in open(DATA_PATH, "r")] if DATA_PATH.endswith(".jsonl") else json.load(open(DATA_PATH,"r"))
     # 输出路径
     OUTPUT_DIR = args.output_path
     num_actors = args.num_actor
     OUTPUT_DIR = os.path.join(OUTPUT_DIR,MODEL_PATH.split('/')[-1])
-    NEW_FILE = os.path.join(OUTPUT_DIR, DATA_PATH.split("/")[-1].replace(".jsonl", "_pred.jsonl").replace('.parquet','.json'))
+    NEW_FILE = os.path.join(OUTPUT_DIR, DATA_PATH.split("/")[-1].replace(".jsonl", "_pred.jsonl").replace('.parquet',f'_{args.prefix}.json'))
+    print(NEW_FILE)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    
     data_chunks = [hf_dataset.from_dict(data[i::num_actors]) for i in range(num_actors)]
-
 
     # 加载处理器
     processor = AutoProcessor.from_pretrained(MODEL_PATH)
@@ -362,7 +355,7 @@ def main(args):
     # 使用 PyTorch Dataset 和 DataLoader
     futures = []
     for i, chunk in enumerate(data_chunks):
-        dataset = MultiModalDataset(chunk, processor)
+        dataset = MultiModalDataset(chunk, processor, args.prefix)
         dataloader = DataLoader(dataset, batch_size=MICRO_BATCH, shuffle=False, num_workers=16, collate_fn=custom_collate_fn)
         futures.append(workers[i].process_data.remote(dataloader))
 
@@ -382,21 +375,6 @@ if __name__ == "__main__":
     parser.add_argument('--data_path', type=str, default="<data_path>")
     parser.add_argument('--output_path', type=str, default='./outputs')
     parser.add_argument('--num_actor', type=int, default=8)
-    parser.add_argument('--n', type=int, default=8, help='Number of trials to run')
+    parser.add_argument('--prefix', type=str, default=None)
     args = parser.parse_args()
-    # SAMPLING_PARAMS = SamplingParams(
-    #     temperature=1.0,
-    #     top_p=0.7,
-    #     repetition_penalty=1.05,
-    #     max_tokens=1024,  # 根据需要调整最大生成长度
-    #     n=args.n,
-    #     stop_token_ids=[],  # 停止标志
-    # )
-    SAMPLING_PARAMS = SamplingParams(
-        temperature=0.0,
-        top_p=0.001,
-        repetition_penalty=1.05,
-        max_tokens=1024,  # 根据需要调整最大生成长度
-        stop_token_ids=[],  # 停止标志
-    )
     main(args)
