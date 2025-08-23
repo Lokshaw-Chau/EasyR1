@@ -27,7 +27,6 @@ SAMPLING_PARAMS = SamplingParams(
     max_tokens=1024,  # 根据需要调整最大生成长度
     stop_token_ids=[],  # 停止标志
 )
-
 # 数据路径
 DATA_PATH = ""
 
