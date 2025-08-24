@@ -311,7 +311,7 @@ class vLLMRollout(BaseRollout):
                 if len(response_id) > 0:
                     if response_id[0] == 151657:  # <tool_call>
                         enforce_nothinking.append(True)
-                    elif response_id[0] == 13708:  # <think>
+                    elif response_id[0] == 13708:  # <thinking>
                         enforce_nothinking.append(False)
                     else:
                         enforce_nothinking.append(False)
