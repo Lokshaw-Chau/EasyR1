@@ -29,7 +29,7 @@ from transformers import PreTrainedTokenizer, ProcessorMixin
 from ..models.transformers.qwen2_vl import get_rope_index
 from . import torch_functional as VF
 import json
-from .agent_function_call import GUIAction
+from .agent_function_call import MobileUse
 
 from qwen_agent.llm.fncall_prompts.nous_fncall_prompt import (
     NousFnCallPrompt,
@@ -130,7 +130,7 @@ class RLHFDataset(Dataset):
 
         # prompt_str: str = row_dict[self.prompt_key]
         text=row_dict['instruction']
-        # history=row_dict['history']
+        history=row_dict['history']
         # task_type=row_dict['task_type']
         row_dict.pop('verify_bbox', None)
         row_dict.pop('success_rate', None)
@@ -160,10 +160,11 @@ class RLHFDataset(Dataset):
             #     "<tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
             # )
             prompt_str = (
-                "You may conduct reasoning to help you better solve the problem before output the final answer in <tool_call></tool_call> tags."
-                "The thinking process MUST be surrounded <think></think> tags as follows:\n"
-                "<think> ... </think> <tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
+                "You may conduct step-by-step reasoning to help you better solve the problem before the <tool_call></tool_call> XML tags."
+                "The thinking process MUST be surrounded <thinking></thinking> tags as follows:\n"
+                "<thinking> ... </thinking> <tool_call>{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"...\", ...}}</tool_call>\n"
                 f"<image>\nThe user query: {text}\n"
+                f"Task progress (You have done the following operation on the current device): {history}\n"
             )
         else:
             raise ValueError(f"Unknown format_prompt {self.format_prompt}.")
@@ -201,7 +202,7 @@ class RLHFDataset(Dataset):
         
         images=[process_image(image, self.max_pixels, self.min_pixels) for image in images]
 
-        screenspot = GUIAction(
+        screenspot = MobileUse(
             cfg={"display_width_px": images[0].width, "display_height_px": images[0].height},
         )
         nousFnCallPrompt = NousFnCallPrompt()
@@ -237,8 +238,8 @@ class RLHFDataset(Dataset):
             gt_bbox[2]*=scalex
             gt_bbox[3]*=scaley
 
-        # gt={'action': row_dict['gt_action'],'gt_bbox': gt_bbox,'input_text': row_dict['gt_input_text']}
-        gt={'gt_bbox': gt_bbox}
+        gt={'action': row_dict['gt_action'],'gt_bbox': gt_bbox,'input_text': row_dict['gt_input_text'], 'image_size': [scalex,scaley]}
+        # gt={'gt_bbox': gt_bbox}
         # if self.system_prompt:
         #     messages.insert(0, {"role": "system", "content": self.system_prompt})
 

@@ -192,7 +192,7 @@ class vLLMRollout(BaseRollout):
                 if self.intervention_think_n > 0:
                     sampling_params_thinking = deepcopy(self.sampling_params)
                     sampling_params_thinking.n = self.intervention_think_n
-                    # enforce the first token to be "<think>"
+                    # enforce the first token to be "<thinking>"
                     sampling_params_thinking.max_tokens = self.sampling_params.max_tokens - 1
                     vllm_inputs_thinking = deepcopy(vllm_inputs)
                     for i, ipt in enumerate(vllm_inputs_thinking):
@@ -231,7 +231,7 @@ class vLLMRollout(BaseRollout):
                 if len(response_id) > 0:
                     if response_id[0] == 151657:  # <tool_call>
                         enforce_nothinking.append(True)
-                    elif response_id[0] == 13708:  # <think>
+                    elif response_id[0] == 13708:  # <thinking>
                         enforce_nothinking.append(False)
                     else:
                         # Default behavior: if neither token, assume thinking mode
