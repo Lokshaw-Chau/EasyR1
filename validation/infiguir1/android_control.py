@@ -392,12 +392,15 @@ if __name__ == '__main__':
         thinking=args.thinking, 
         debug=args.debug
     )
+    model_name = args.model_path.split('/')[-1]
+    prefix = "<thinking>" if args.thinking else "<tool_call>"
+    output_dir = os.path.join(args.output_dir, model_name, 'android_control', args.eval_type, prefix)
+    os.makedirs(output_dir, exist_ok=True)
+    
     jobs = android_control.generate_jobs(total_split=args.total_split, split=args.split)
     jobs = android_control.inference(jobs)
     
-    model_name = args.model_path.split('/')[-1]
-    output_dir = os.path.join(args.output_dir, model_name, 'android_control', args.eval_type)
-    os.makedirs(output_dir, exist_ok=True)
+    
     with open(os.path.join(output_dir, f'jobs_{args.split}_{args.total_split}{"_debug" if args.debug else ""}.json'), 'w') as f:
         json.dump(jobs, f, indent=2)
     # android_control.compute_scores(jobs)
