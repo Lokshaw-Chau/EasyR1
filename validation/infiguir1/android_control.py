@@ -21,6 +21,7 @@ from qwen_agent.llm.fncall_prompts.nous_fncall_prompt import (
 )
 from agent_function_call import MobileUse
 
+# FIXME：图片不能被缩放
 def init_worker():
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
@@ -132,8 +133,8 @@ class AndroidControl:
                 lang=None,
             )
             system_message = system_message[0].model_dump()
-            system_message = [text['text'] for text in system_message['content']]
-            system_message = ' '.join(system_message)
+            # system_message = [text['text'] for text in system_message['content']]
+            # system_message = ' '.join(system_message)
 
             # user message
             task_progress = []
@@ -182,7 +183,9 @@ class AndroidControl:
                     'messages': [
                         {
                             'role': 'system',
-                            'content': system_message
+                            'content': [
+                                {"type": "text", "text": msg["text"]} for msg in system_message["content"]
+                            ],
                         },
                         {
                             'role': 'user',
@@ -279,10 +282,13 @@ class AndroidControl:
             for i in range(0, len(valid_input_messages), batch_size):
                 batch_messages = valid_input_messages[i:i+batch_size]
                 batch_images = valid_images[i:i+batch_size]
+                prefix = "<thinking>" if self.thinking else "<tool_call>"
                 batch_outputs = self.llm.chat(batch_messages, batch_images, 
                                             temperature=temperature, 
                                             max_tokens=max_tokens, 
-                                            seed=seed)
+                                            seed=seed,
+                                            prefix=prefix
+                                            )
                 outputs.extend(batch_outputs)
                 pbar.update(len(batch_messages))
         

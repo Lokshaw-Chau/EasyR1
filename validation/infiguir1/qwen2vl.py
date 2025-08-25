@@ -97,6 +97,7 @@ class Qwen2VL:
         temperature: float = 0.2,
         max_tokens: int = 2048,
         top_p: float = 0.95,
+        prefix: str = "<thinking>",
         **kwargs
     ) -> Union[str, List[str]]:
         """
@@ -127,7 +128,7 @@ class Qwen2VL:
                 
                 # Build multimodal data dictionary
                 input_data = {
-                    "prompt": prompt,
+                    "prompt": prompt + prefix,
                     "multi_modal_data": {
                         "image": img_list
                     }
@@ -135,7 +136,7 @@ class Qwen2VL:
             else:
                 prompt = self._format_prompt(msg, [])
                 input_data = {
-                    "prompt": prompt,
+                    "prompt": prompt + prefix,
                     "multi_modal_data": {}
                 }
                 
