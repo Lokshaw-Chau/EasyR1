@@ -176,6 +176,8 @@ checkpoints/
 wandb/
 ckpts/
 data/
+ipynb/
+outputs/
 
 _*.yaml
 _*.sh
