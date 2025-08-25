@@ -89,13 +89,13 @@ class AndroidControl:
         #     self.system_prompt = "You are a helpful assistant."
         self.seed = seed
 
-        self.llm = Qwen2VL(
-            model_path=model_path,
-            tensor_parallel_size=tensor_parallel_size,
-            enforce_eager=enforce_eager,
-            max_num_seqs=max_num_seqs,
-            max_pixels=max_pixels
-        )
+        # self.llm = Qwen2VL(
+        #     model_path=model_path,
+        #     tensor_parallel_size=tensor_parallel_size,
+        #     enforce_eager=enforce_eager,
+        #     max_num_seqs=max_num_seqs,
+        #     max_pixels=max_pixels
+        # )
 
     def generate_jobs(self, total_split, split) -> List[Dict]:
 
@@ -355,8 +355,8 @@ class AndroidControl:
         output_dir = os.path.join(self.output_dir, model_name, 'android_control', self.eval_type)
         os.makedirs(output_dir, exist_ok=True)
         
-        # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        timestamp = self.eval_file.split('/').replace(".json", "")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # timestamp = self.eval_file.split('/').replace(".json", "")
         with open(os.path.join(output_dir, f'scores_{timestamp}{"_debug" if self.debug else ""}.json'), 'w') as f:
             json.dump(res, f, indent=2)
         
@@ -386,13 +386,20 @@ if __name__ == '__main__':
         thinking=args.thinking, 
         debug=args.debug
     )
-    jobs = android_control.generate_jobs(total_split=args.total_split, split=args.split)
-    jobs = android_control.inference(jobs)
+    # jobs = android_control.generate_jobs(total_split=args.total_split, split=args.split)
+    # jobs = android_control.inference(jobs)
     
     model_name = args.model_path.split('/')[-1]
     output_dir = os.path.join(args.output_dir, model_name, 'android_control', args.eval_type)
     os.makedirs(output_dir, exist_ok=True)
-    with open(os.path.join(output_dir, f'jobs_{args.split}_{args.total_split}{"_debug" if args.debug else ""}.json'), 'w') as f:
-        json.dump(jobs, f, indent=2)
-    # android_control.compute_scores(jobs)
+    # with open(os.path.join(output_dir, f'jobs_{args.split}_{args.total_split}{"_debug" if args.debug else ""}.json'), 'w') as f:
+    #     json.dump(jobs, f, indent=2)
+    jobs = []
+    for file in os.listdir(output_dir):
+        if file.endswith('.json'):
+            with open(os.path.join(output_dir, file), 'r') as f:
+                part_data = json.load(f)
+            
+            jobs.extend(part_data)
+    android_control.compute_scores(jobs)
     
