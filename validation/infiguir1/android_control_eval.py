@@ -353,7 +353,8 @@ class AndroidControl:
         print(json.dumps(res, indent=' '))
 
         model_name = self.model_path.split('/')[-1]
-        output_dir = os.path.join(self.output_dir, model_name, 'android_control', self.eval_type)
+        prefix = "<thinking>" if self.thinking else "<tool_call>"
+        output_dir = os.path.join(self.output_dir, model_name, 'android_control', self.eval_type, prefix)
         os.makedirs(output_dir, exist_ok=True)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
