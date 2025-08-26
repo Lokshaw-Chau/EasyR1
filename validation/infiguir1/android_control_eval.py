@@ -298,9 +298,11 @@ class AndroidControl:
         all_click_num = 0
         error_num = 0
         for job in tqdm(jobs, desc='Computing scores'):
+            output = job['llm_output']
+            current_check_pam = job['check_pams']
+            if current_check_pam['action'] == 'click':
+                all_click_num += 1
             try:
-                output = job['llm_output']
-                current_check_pam = job['check_pams']
                 pred = output
                 if self.thinking and '</think>' in pred:
                     pred = pred.split('</think>')[-1]
@@ -329,8 +331,7 @@ class AndroidControl:
                 if extact_match and pred_action['action'] == 'click':
                     click_match_num += 1
                     
-                if current_check_pam['action'] == 'click':
-                    all_click_num += 1
+                
             except:
                 import traceback
                 traceback.print_exc()
