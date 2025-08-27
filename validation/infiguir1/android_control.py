@@ -66,7 +66,7 @@ class AndroidControl:
         image_root,
         output_dir,
         eval_type,
-        thinking=False,
+        prefix=None,
         max_pixels=6400*28*28,
         tensor_parallel_size=1,
         enforce_eager=False,
@@ -80,7 +80,8 @@ class AndroidControl:
         self.eval_type = eval_type
         self.max_pixels = max_pixels
         self.image_root = image_root
-        self.thinking = thinking
+        # self.thinking = thinking
+        self.prefix = prefix
         self.debug = debug
         self.num_processes = num_processes
         self.output_dir = output_dir
@@ -282,7 +283,7 @@ class AndroidControl:
             for i in range(0, len(valid_input_messages), batch_size):
                 batch_messages = valid_input_messages[i:i+batch_size]
                 batch_images = valid_images[i:i+batch_size]
-                prefix = "<thinking>" if self.thinking else "<tool_call>"
+                prefix = '' if self.prefix is None else self.prefix
                 batch_outputs = self.llm.chat(batch_messages, batch_images, 
                                             temperature=temperature, 
                                             max_tokens=max_tokens, 
@@ -308,7 +309,7 @@ class AndroidControl:
                 output = job['llm_output']
                 current_check_pam = job['check_pams']
                 pred = output
-                if self.thinking and '</think>' in pred:
+                if '</think>' in pred:
                     pred = pred.split('</think>')[-1]
                 if '<tool_call>' in pred:
                     pred = pred.split('<tool_call>')[1]
@@ -376,7 +377,7 @@ if __name__ == '__main__':
     parser.add_argument('--eval_file', type=str, required=True, default='./android_control_test.json', help='Path to the evaluation file')
     parser.add_argument('--image_root', type=str, required=True, default='./', help='Path to the image root')
     parser.add_argument('--output_dir', type=str, required=True, default='./', help='Path to the output directory')
-    parser.add_argument('--thinking', action='store_true', help='Enable thinking mode')
+    parser.add_argument('--prefix', type=str, default=None)
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--total_split', type=int, default=4)
     parser.add_argument('--split', type=int, required=True)
@@ -389,11 +390,12 @@ if __name__ == '__main__':
         image_root=args.image_root,
         output_dir=args.output_dir,
         eval_type=args.eval_type, 
-        thinking=args.thinking, 
+        # thinking=args.thinking, 
+        prefix=args.prefix,
         debug=args.debug
     )
     model_name = args.model_path.split('/')[-1]
-    prefix = "<thinking>" if args.thinking else "<tool_call>"
+    prefix = args.prefix if args.prefix is not None else 'None'
     output_dir = os.path.join(args.output_dir, model_name, 'android_control', args.eval_type, prefix)
     os.makedirs(output_dir, exist_ok=True)
     

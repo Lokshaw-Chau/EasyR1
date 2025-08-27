@@ -65,7 +65,8 @@ class AndroidControl:
         image_root,
         output_dir,
         eval_type,
-        thinking=False,
+        # thinking=False,
+        prefix='',
         max_pixels=6400*28*28,
         tensor_parallel_size=1,
         enforce_eager=False,
@@ -79,7 +80,8 @@ class AndroidControl:
         self.eval_type = eval_type
         self.max_pixels = max_pixels
         self.image_root = image_root
-        self.thinking = thinking
+        # self.thinking = thinking
+        self.prefix = prefix
         self.debug = debug
         self.num_processes = num_processes
         self.output_dir = output_dir
@@ -325,7 +327,7 @@ class AndroidControl:
             
             try:
                 pred = output
-                if self.thinking and '</thinking>' in pred:
+                if '</thinking>' in pred:
                     pred = pred.split('</thinking>')[-1]
                 if '<tool_call>' in pred:
                     pred = pred.split('<tool_call>')[1]
@@ -386,7 +388,7 @@ class AndroidControl:
         print(json.dumps(res, indent=' '))
 
         model_name = self.model_path.split('/')[-1]
-        prefix = "<thinking>" if self.thinking else "<tool_call>"
+        prefix = self.prefix if args.prefix is not None else 'None'
         output_dir = os.path.join(self.output_dir, model_name, 'android_control', self.eval_type, prefix)
         os.makedirs(output_dir, exist_ok=True)
         
@@ -405,7 +407,7 @@ if __name__ == '__main__':
     parser.add_argument('--eval_file', type=str, required=True, default='./android_control_test.json', help='Path to the evaluation file')
     parser.add_argument('--image_root', type=str, required=True, default='./', help='Path to the image root')
     parser.add_argument('--output_dir', type=str, required=True, default='./', help='Path to the output directory')
-    parser.add_argument('--thinking', action='store_true', help='Enable thinking mode')
+    parser.add_argument('--prefix', type=str, default=None)
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--total_split', type=int, default=4)
     parser.add_argument('--split', type=int, required=True)
@@ -418,14 +420,15 @@ if __name__ == '__main__':
         image_root=args.image_root,
         output_dir=args.output_dir,
         eval_type=args.eval_type, 
-        thinking=args.thinking, 
+        # thinking=args.thinking, 
+        prefix=args.prefix,
         debug=args.debug
     )
     # jobs = android_control.generate_jobs(total_split=args.total_split, split=args.split)
     # jobs = android_control.inference(jobs)
     
     model_name = args.model_path.split('/')[-1]
-    prefix = "<thinking>" if args.thinking else "<tool_call>"
+    prefix = args.prefix if args.prefix is not None else 'None'
     output_dir = os.path.join(args.output_dir, model_name, 'android_control', args.eval_type, prefix)
     os.makedirs(output_dir, exist_ok=True)
     # with open(os.path.join(output_dir, f'jobs_{args.split}_{args.total_split}{"_debug" if args.debug else ""}.json'), 'w') as f:
