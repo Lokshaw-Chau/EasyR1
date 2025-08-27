@@ -294,18 +294,39 @@ class AndroidControl:
     def compute_scores(self, jobs) -> Dict[str, Any]:
         Type_match_num = 0
         Extact_match_num = 0
-        click_match_num = 0
-        all_click_num = 0
+        # click_match_num = 0
+        # input_match_num = 0
+        # long_press_match_num = 0
+        # swipe_match_num = 0
+        # sb_match_num = 0
+        # open_match_
+        match_num_dict = {}
+        history_len_dict = {}
+        # all_action_dict = {}
+        # all_click_num = 0
         error_num = 0
         for job in tqdm(jobs, desc='Computing scores'):
             output = job['llm_output']
             current_check_pam = job['check_pams']
-            if current_check_pam['action'] == 'click':
-                all_click_num += 1
+            history_len = job['step_id'] + 1
+            if str(history_len) not in history_len_dict.keys():
+                history_len_dict[f"{history_len}_all"] = 1
+                history_len_dict[f"{history_len}"] = 0
+            else:
+                history_len_dict[f"{history_len}_all"] += 1
+
+
+            if current_check_pam['action'] not in match_num_dict.keys():
+                # all_click_num += 1
+                match_num_dict[f"{current_check_pam['action']}_all"] = 1
+                match_num_dict[f"{current_check_pam['action']}"] = 0
+            else:
+                match_num_dict[f"{current_check_pam['action']}_all"] += 1
+            
             try:
                 pred = output
-                if self.thinking and '</think>' in pred:
-                    pred = pred.split('</think>')[-1]
+                if self.thinking and '</thinking>' in pred:
+                    pred = pred.split('</thinking>')[-1]
                 if '<tool_call>' in pred:
                     pred = pred.split('<tool_call>')[1]
                 else:
@@ -328,8 +349,11 @@ class AndroidControl:
                     Extact_match_num += 1
                     job['extact_match'] = True
                     
-                if extact_match and pred_action['action'] == 'click':
-                    click_match_num += 1
+                # if extact_match and pred_action['action'] == 'click':
+                #     click_match_num += 1
+                if extact_match:
+                    match_num_dict[pred_action['action']] += 1
+                    history_len_dict[f"{history_len}"] += 1
                     
                 
             except:
@@ -339,17 +363,26 @@ class AndroidControl:
                 print(job)
                 error_num += 1
                 continue
+        
         print('Type_match_num and Extact_match_num: ', Type_match_num, Extact_match_num, '/ all =', len(jobs))
-        print('click_match_num:', click_match_num, '/ all =', all_click_num)
+        # print('click_match_num:', click_match_num, '/ all =', all_click_num)
         print('error num', error_num)
 
         res = {
             'type_match_acc': Type_match_num/len(jobs)*100,
             'extact_match_acc': Extact_match_num/len(jobs)*100,
-            'click_match_acc': click_match_num/all_click_num*100,
+            # 'click_match_acc': click_match_num/all_click_num*100,
             'error_num': error_num,
         }
-        
+        for key in match_num_dict.keys():
+            if key.endswith('_all'):
+                continue
+            res[f'{key}_acc'] = match_num_dict[key]/match_num_dict[f'{key}_all']*100
+        for key in history_len_dict.keys():
+            if key.endswith('_all'):
+                continue
+            res[f'history_len_{key}_acc'] = history_len_dict[key]/history_len_dict[f'{key}_all']*100
+        # print(history_len_dict)
         print(json.dumps(res, indent=' '))
 
         model_name = self.model_path.split('/')[-1]
@@ -399,10 +432,11 @@ if __name__ == '__main__':
     #     json.dump(jobs, f, indent=2)
     jobs = []
     for file in os.listdir(output_dir):
-        if file.endswith('.json'):
+        if file.startswith('jobs_') and file.endswith('.json'):
             with open(os.path.join(output_dir, file), 'r') as f:
                 part_data = json.load(f)
             
             jobs.extend(part_data)
+    print(len(jobs))
     android_control.compute_scores(jobs)
     
