@@ -351,15 +351,16 @@ class DataParallelPPOActor(BasePPOActor):
                         "actor/ppo_kl": ppo_kl.detach().item(),
                         "actor/cond_loss": cond_loss.mean().detach().item(),
                     }
-                    # if len(first_eot_probs) > 0:
-                    batch_metrics['adapt_think/first_eot_token_probs/mean'] = first_eot_probs.mean().detach().item()
-                    batch_metrics["actor/force_no_think_resp_entropy"] = force_no_think_resp_entropy.detach().item()
-                    batch_metrics["actor/resp_loss_no_think/mean"] = resp_loss[enforce_nothinking].mean().detach().item()
+                    # Add conditional checks for non-empty tensors
+                    if len(first_eot_probs) > 0:
+                        batch_metrics['adapt_think/first_eot_token_probs/mean'] = first_eot_probs.mean().detach().item()
+                        batch_metrics["actor/force_no_think_resp_entropy"] = force_no_think_resp_entropy.detach().item()
+                        batch_metrics["actor/resp_loss_no_think/mean"] = resp_loss[enforce_nothinking].mean().detach().item()
 
-                    # if len(first_t_probs) > 0:
-                    batch_metrics['adapt_think/first_t_token_probs/mean'] = first_t_probs.mean().detach().item()
-                    batch_metrics["actor/force_think_resp_entropy"] = force_think_resp_entropy.detach().item()
-                    batch_metrics["actor/resp_loss_think/mean"] = resp_loss[~enforce_nothinking].mean().detach().item()
+                    if len(first_t_probs) > 0:
+                        batch_metrics['adapt_think/first_t_token_probs/mean'] = first_t_probs.mean().detach().item()
+                        batch_metrics["actor/force_think_resp_entropy"] = force_think_resp_entropy.detach().item()
+                        batch_metrics["actor/resp_loss_think/mean"] = resp_loss[~enforce_nothinking].mean().detach().item()
 
                     append_to_dict(metrics, batch_metrics)
 

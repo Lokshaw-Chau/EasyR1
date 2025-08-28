@@ -283,7 +283,8 @@ class AndroidControl:
             for i in range(0, len(valid_input_messages), batch_size):
                 batch_messages = valid_input_messages[i:i+batch_size]
                 batch_images = valid_images[i:i+batch_size]
-                prefix = '' if self.prefix is None else self.prefix
+                prefix = '' if self.prefix == "None" else self.prefix
+                print('prefix:', prefix)
                 batch_outputs = self.llm.chat(batch_messages, batch_images, 
                                             temperature=temperature, 
                                             max_tokens=max_tokens, 
@@ -377,7 +378,7 @@ if __name__ == '__main__':
     parser.add_argument('--eval_file', type=str, required=True, default='./android_control_test.json', help='Path to the evaluation file')
     parser.add_argument('--image_root', type=str, required=True, default='./', help='Path to the image root')
     parser.add_argument('--output_dir', type=str, required=True, default='./', help='Path to the output directory')
-    parser.add_argument('--prefix', type=str, default=None)
+    parser.add_argument('--prefix', type=str, default="None", help='Prefix to add to the input')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--total_split', type=int, default=4)
     parser.add_argument('--split', type=int, required=True)
@@ -395,7 +396,7 @@ if __name__ == '__main__':
         debug=args.debug
     )
     model_name = args.model_path.split('/')[-1]
-    prefix = args.prefix if args.prefix is not None else 'None'
+    prefix = args.prefix
     output_dir = os.path.join(args.output_dir, model_name, 'android_control', args.eval_type, prefix)
     os.makedirs(output_dir, exist_ok=True)
     

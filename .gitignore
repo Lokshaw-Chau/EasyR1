@@ -181,3 +181,4 @@ outputs/
 
 _*.yaml
 _*.sh
+_*.ipynb

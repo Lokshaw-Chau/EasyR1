@@ -72,7 +72,7 @@ class AndroidControl:
         enforce_eager=False,
         max_num_seqs=2,
         seed=42,
-        debug=False,
+        # debug=False,
         num_processes=16,
         ):
         self.model_path = model_path
@@ -82,7 +82,7 @@ class AndroidControl:
         self.image_root = image_root
         # self.thinking = thinking
         self.prefix = prefix
-        self.debug = debug
+        # self.debug = debug
         self.num_processes = num_processes
         self.output_dir = output_dir
         # if thinking:
@@ -388,13 +388,14 @@ class AndroidControl:
         print(json.dumps(res, indent=' '))
 
         model_name = self.model_path.split('/')[-1]
-        prefix = self.prefix if args.prefix is not None else 'None'
-        output_dir = os.path.join(self.output_dir, model_name, 'android_control', self.eval_type, prefix)
+        prefix = self.prefix
+        # output_dir = os.path.join(self.output_dir, model_name, 'android_control', self.eval_type, prefix)
+        output_dir = self.output_dir
         os.makedirs(output_dir, exist_ok=True)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         # timestamp = self.eval_file.split('/').replace(".json", "")
-        with open(os.path.join(output_dir, f'scores_{timestamp}{"_debug" if self.debug else ""}.json'), 'w') as f:
+        with open(os.path.join(output_dir, f'scores_{timestamp}.json'), 'w') as f:
             json.dump(res, f, indent=2)
         
 
@@ -407,10 +408,10 @@ if __name__ == '__main__':
     parser.add_argument('--eval_file', type=str, required=True, default='./android_control_test.json', help='Path to the evaluation file')
     parser.add_argument('--image_root', type=str, required=True, default='./', help='Path to the image root')
     parser.add_argument('--output_dir', type=str, required=True, default='./', help='Path to the output directory')
-    parser.add_argument('--prefix', type=str, default=None)
-    parser.add_argument('--debug', action='store_true', help='Enable debug mode')
-    parser.add_argument('--total_split', type=int, default=4)
-    parser.add_argument('--split', type=int, required=True)
+    # parser.add_argument('--prefix', type=str, default="None", help='Prefix to add to the input')
+    # parser.add_argument('--debug', action='store_true', help='Enable debug mode')
+    # parser.add_argument('--total_split', type=int, default=4)
+    # parser.add_argument('--split', type=int, required=True)
     
     args = parser.parse_args()
     
@@ -421,15 +422,16 @@ if __name__ == '__main__':
         output_dir=args.output_dir,
         eval_type=args.eval_type, 
         # thinking=args.thinking, 
-        prefix=args.prefix,
-        debug=args.debug
+        # prefix=args.prefix,
+        # debug=args.debug
     )
     # jobs = android_control.generate_jobs(total_split=args.total_split, split=args.split)
     # jobs = android_control.inference(jobs)
     
     model_name = args.model_path.split('/')[-1]
-    prefix = args.prefix if args.prefix is not None else 'None'
-    output_dir = os.path.join(args.output_dir, model_name, 'android_control', args.eval_type, prefix)
+    # prefix = args.prefix
+    output_dir = args.output_dir
+    # output_dir = os.path.join(args.output_dir, model_name, 'android_control', args.eval_type, prefix)
     os.makedirs(output_dir, exist_ok=True)
     # with open(os.path.join(output_dir, f'jobs_{args.split}_{args.total_split}{"_debug" if args.debug else ""}.json'), 'w') as f:
     #     json.dump(jobs, f, indent=2)
