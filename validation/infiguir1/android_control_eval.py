@@ -307,10 +307,14 @@ class AndroidControl:
         # all_action_dict = {}
         # all_click_num = 0
         error_num = 0
+        think_cnt = 0
         for job in tqdm(jobs, desc='Computing scores'):
             output = job['llm_output']
             current_check_pam = job['check_pams']
             history_len = job['step_id'] + 1
+            if '</thinking>' in output:
+                think_cnt += 1
+
             if str(history_len) not in history_len_dict.keys():
                 history_len_dict[f"{history_len}_all"] = 1
                 history_len_dict[f"{history_len}"] = 0
@@ -374,6 +378,7 @@ class AndroidControl:
             'type_match_acc': Type_match_num/len(jobs)*100,
             'extact_match_acc': Extact_match_num/len(jobs)*100,
             # 'click_match_acc': click_match_num/all_click_num*100,
+            'think_ratio': think_cnt/len(jobs)*100,
             'error_num': error_num,
         }
         for key in match_num_dict.keys():
