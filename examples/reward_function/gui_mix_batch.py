@@ -279,12 +279,8 @@ def compute_score(predict_strs: list[str], ground_truths: list[str], training_pr
         scores.append(_compute_score(predict_str, ground_truth, current_think_ratio, None))
     return scores
 
-# pr=("<thinking> The command 'What's on the menu at IHOP?' suggests a search for information about the menu at an IHOP restaurant. However, "
-# "the current UI screenshot is a calendar application displaying holidays and significant dates for the month of October and November. There is no direct way to per"
-# "form a web search or access an IHOP menu from this calendar app. Therefore, the appropriate action would be to exit the current application and open a web browser"
-# "or a dedicated app for searching the IHOP menu. "                                                                                                               
-# "Since the action history is 'None', the first step is to navigate away from the current app to a web browser or a search engine.</thinking> "
-# " <answer>[{'action': 'scroll', 'point': [123, 401], 'input_text': 'left'}]</answer>")
-# gt=json.dumps({"action": "scroll", "gt_bbox": [103.0, 409.18800000000005], "input_text": "LEFT"})
-# print(gr_iou_accuracy_reward(pr,gt))
-# print(gr_format_reward(pr))
+if __name__ == "__main__":
+    pr=["<thinking> I need to go back to see the brand option. </thinking>  \n<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"system_button\", \"button\": \"Back\"}}</tool_call>"]
+    gt=[json.dumps({"action": "system_button", "gt_bbox": [-1.0, -1.0], "input_text": "Back", "image_size": [1080, 1920]})]
+    # print(r1gui_accuracy_reward(pr,gt))
+    print(compute_score(pr, gt))

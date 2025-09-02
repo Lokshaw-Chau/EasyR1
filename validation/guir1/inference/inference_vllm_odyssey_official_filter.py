@@ -61,18 +61,18 @@ if not initialize_ray():
 MODEL_PATH = ""
 
 # 推理参数
-SAMPLING_PARAMS = SamplingParams(
-    temperature=0.0,
-    top_p=0.001,
-    repetition_penalty=1.05,
-    max_tokens=1024,  # 根据需要调整最大生成长度
-    stop_token_ids=[],  # 停止标志
-)
+# SAMPLING_PARAMS = SamplingParams(
+#     temperature=0.0,
+#     top_p=0.001,
+#     repetition_penalty=1.05,
+#     max_tokens=1024,  # 根据需要调整最大生成长度
+#     stop_token_ids=[],  # 停止标志
+# )
 # 数据路径
 DATA_PATH = ""
 
 # 微批大小
-MICRO_BATCH = 24
+MICRO_BATCH = 6
 
 def extract_action(content):
     # answer_tag_pattern = r'<tool_call>(.*?)</tool_call>'
@@ -151,13 +151,40 @@ def extract_coord2(content):
         return [0, 0, 0, 0], False
     except:
         return [0, 0, 0, 0], False
+
+def calculate_f1_score(predicted_str, ground_truth_str):
+    predicted_str=predicted_str.replace("[","").replace("]","")
+    ground_truth_str=ground_truth_str.replace("[","").replace("]","")
+    predicted_tokens = set(predicted_str.lower().split())
+    ground_truth_tokens = set(ground_truth_str.lower().split())
+
+    if len(predicted_tokens)==1 and len(ground_truth_tokens)==1:
+        predicted_token=list(predicted_tokens)[0]
+        ground_truth_token=list(ground_truth_tokens)[0]
+        if predicted_token in ground_truth_token or ground_truth_token in predicted_token:
+            return 1
     
+    common_tokens = predicted_tokens.intersection(ground_truth_tokens)
+    if len(predicted_tokens) == 0:
+        precision = 0
+    else:
+        precision = len(common_tokens) / len(predicted_tokens)
+    if len(ground_truth_tokens) == 0:
+        recall = 0
+    else:
+        recall = len(common_tokens) / len(ground_truth_tokens)
+    
+    if precision + recall == 0:
+        f1_score = 0
+    else:
+        f1_score = 2 * (precision * recall) / (precision + recall)
+    return f1_score
+
 class MultiModalDataset(Dataset):
-    def __init__(self, data, processor, prefix=None,):
+    def __init__(self, data, processor):
         self.data = data
         self.processor = processor
         self.processor.max_pixels=1258291
-        self.prefix = prefix if prefix else ""
 
     def __len__(self):
         return len(self.data)
@@ -230,7 +257,7 @@ class MultiModalDataset(Dataset):
             tokenize=False,
             add_generation_prompt=True,
         )
-        prompt += self.prefix
+
         # prompt.replace("<|vision_start|><|image_pad|><|vision_end|>","")
         # prompt.replace("<image>","<|vision_start|><|image_pad|><|vision_end|>")
 
@@ -298,47 +325,114 @@ class Worker:
         self.output_path = output_path
 
     def process_data(self, dataloader):
-
+        results = []
 
         for batch in tqdm(dataloader):
-            results = []
+            batch_results = []
             prompts = batch["prompts"]
             multi_modal_data = batch["multi_modal_data"]
             mm_processor_kwargs = batch["mm_processor_kwargs"]
             original_samples = batch["original_samples"]
 
-            llm_inputs = [
-                {
-                    "prompt": prompt,
-                    "multi_modal_data": mm_data,
-                    "mm_processor_kwargs": mm_kwargs,
-                }
-                for prompt, mm_data, mm_kwargs in zip(prompts, multi_modal_data, mm_processor_kwargs)
-            ]
+            for prefix in ['<thinking>', '<tool_call>']:
 
-            # 执行推理
-            outputs = self.llm.generate(llm_inputs, sampling_params=self.sampling_params)
+                llm_inputs = [
+                    {
+                        "prompt": prompt + prefix,
+                        "multi_modal_data": mm_data,
+                        "mm_processor_kwargs": mm_kwargs,
+                    }
+                    for prompt, mm_data, mm_kwargs in zip(prompts, multi_modal_data, mm_processor_kwargs)
+                ]
 
-            # 保存结果
-            for original_sample, output in zip(original_samples, outputs):
-                generated_text = output.outputs[0].text
-                print(generated_text)
-                # gt_bbox = original_sample["gt_bbox"]
-                original_sample["pred"] = generated_text
-                pred_coord, _ = extract_coord(generated_text)
-                original_sample["pred_coord"] = [pred_coord[0]*original_sample["scale"][0],pred_coord[1]*original_sample["scale"][1]]
-                pred_action = extract_action(generated_text)
-                original_sample["pred_action"] = pred_action
-                original_sample["pred_input_text"]=extract_input_text(generated_text)
-                # print(original_sample["pred_input_text"],original_sample["gt_input_text"])
-                original_sample["scale"]= original_sample["scale"]
-                original_sample["image"]=''
-                results.append(original_sample)
+                # 执行推理
+                outputs = self.llm.generate(llm_inputs, sampling_params=self.sampling_params, use_tqdm=True)
 
-            print(f"writing results to file...{self.output_path}")
-            with open(self.output_path, "a") as f:
-                for result in results:
-                    f.write(json.dumps(result) + "\n")
+                # 保存结果
+                for original_sample, output in zip(original_samples, outputs):
+                    # one_pass = False
+                    # one_fail = False
+                    flags = []
+                    preds = []
+                    # texts = [output.outputs[i].text for i in range(len(output.outputs))]
+                    # print(texts)
+                    gt_bbox = original_sample["gt_bbox"]
+
+                    for i in range(len(output.outputs)):
+
+                        generated_text = output.outputs[i].text
+                        preds.append(generated_text)
+                        pred_action = extract_action(generated_text)
+                        
+                        if pred_action != original_sample["gt_action"]:
+                            flags.append(False)
+                            continue
+                        if pred_action in ['click', 'long_press']:
+                            pred_coord, _ = extract_coord(generated_text)
+                            pred_coord = [pred_coord[0]*original_sample["scale"][0],pred_coord[1]*original_sample["scale"][1]]
+                            pred_x, pred_y = pred_coord[:2]
+                            scale_x, scale_y = original_sample['scale']
+                            origin_width, origin_hight = original_sample['image_size']
+                            gt_bbox = original_sample['gt_bbox']
+                            gt_bbox = [gt_bbox[0]*origin_width/scale_x, gt_bbox[1]*origin_hight/scale_y, gt_bbox[2]*origin_width/scale_x, gt_bbox[3]*origin_hight/scale_y]
+                            print(pred_coord, gt_bbox)
+                            # if ((gt_bbox[0]-pred_x)/original_sample['image_size'][0])**2 + ((gt_bbox[1]-pred_y)/original_sample['image_size'][1])**2 < 0.14**2:
+                            if gt_bbox[0] < pred_coord[0] < gt_bbox[2] and gt_bbox[1] < pred_coord[1] < gt_bbox[3]:
+                                flags.append(True)
+                            else:
+                                flags.append(False)
+                        elif pred_action in ['open','type', 'terminate']:
+                            pred_input_text = extract_input_text(generated_text)
+                            if calculate_f1_score(pred_input_text, original_sample['gt_input_text'])>=0.5:
+                                flags.append(True)
+                            else:
+                                flags.append(False)
+                        elif pred_action in ['system_button']:
+                            pred_input_text = extract_button(generated_text)
+                            if calculate_f1_score(pred_input_text, original_sample['gt_input_text'])>=0.5:
+                                flags.append(True)
+                            else:
+                                flags.append(False)
+                        elif pred_action in ['swipe']:
+                            pred_coord, _ = extract_coord(generated_text)
+                            pred_coord2, _ = extract_coord2(generated_text)
+                            x1, y1 = pred_coord
+                            x2, y2 = pred_coord2
+                            delta_x = x2 - x1
+                            delta_y = y2 - y1
+
+
+                            if abs(delta_x) > abs(delta_y):
+                                if delta_x > 0:
+                                    pred_direction = 'right'
+                                else:
+                                    pred_direction = 'left'
+                            else:
+                                if delta_y > 0:
+                                    pred_direction = 'down'
+                                else:
+                                    pred_direction = 'up'
+
+                            if pred_direction == original_sample['gt_input_text']:
+                                flags.append(True)
+                            else:
+                                flags.append(False)
+                        else:
+                            print(f"Unrecognized action: {pred_action}")
+                            
+                        
+                    original_sample[f"{prefix}_pass"] = flags
+                    original_sample["image"]=''
+                    original_sample[f"{prefix}_pred"] = preds
+                    if prefix == '<tool_call>':
+                        # results.append(original_sample)
+                        batch_results.append(original_sample)
+                    # results.append(original_sample)
+                    # print(original_sample)
+            
+            with open(self.output_path, "a") as ans_file:
+                for sample in batch_results:
+                    ans_file.write(json.dumps(sample) + "\n")
 
         return results
 
@@ -355,9 +449,25 @@ def main(args):
     OUTPUT_DIR = args.output_path
     num_actors = args.num_actor
     OUTPUT_DIR = os.path.join(OUTPUT_DIR,MODEL_PATH.split('/')[-1])
-    NEW_FILE = os.path.join(OUTPUT_DIR, DATA_PATH.split("/")[-1].replace(".jsonl", "_pred.jsonl").replace('.parquet',f'_{args.prefix}.json'))
-    print(NEW_FILE)
+    NEW_FILE = os.path.join(OUTPUT_DIR, DATA_PATH.split("/")[-1].replace(".jsonl", "_pred.jsonl").replace('.parquet',f'_{args.n}.json'))
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    # filter data
+    if args.n != 1:
+        old_file = NEW_FILE.replace(f'_{args.n}.json', f'_{args.n//2}.json')
+        with open(old_file, "r") as f:
+            old_file_data = [json.loads(line) for line in f.readlines()]
+        new_data_id_list = []
+        for item in old_file_data:
+            think_pass_list = item['<thinking>_pass']
+            tool_call_pass_list = item['<tool_call>_pass']
+            if any(think_pass_list) and any(tool_call_pass_list):
+                continue
+            new_data_id_list.append(item['instruction']+str(item['gt_bbox'])+item['gt_input_text']+item['gt_action']+item['history'])
+
+        # if id not in new_data_id_list, drop the sample
+        data = [item for item in data if (item['instruction']+str(item['gt_bbox'])+item['gt_input_text']+item['gt_action']+item['history']) in new_data_id_list]
+        data = hf_dataset.from_list(data)
+        print(f"Filtered data size: {len(data)}")
     
     data_chunks = [hf_dataset.from_dict(data[i::num_actors]) for i in range(num_actors)]
 
@@ -372,8 +482,8 @@ def main(args):
     # 使用 PyTorch Dataset 和 DataLoader
     futures = []
     for i, chunk in enumerate(data_chunks):
-        dataset = MultiModalDataset(chunk, processor, args.prefix)
-        dataloader = DataLoader(dataset, batch_size=MICRO_BATCH, shuffle=False, num_workers=16, collate_fn=custom_collate_fn)
+        dataset = MultiModalDataset(chunk, processor)
+        dataloader = DataLoader(dataset, batch_size=MICRO_BATCH, shuffle=False, num_workers=64, collate_fn=custom_collate_fn)
         futures.append(workers[i].process_data.remote(dataloader))
 
     # 收集所有结果
@@ -392,6 +502,14 @@ if __name__ == "__main__":
     parser.add_argument('--data_path', type=str, default="<data_path>")
     parser.add_argument('--output_path', type=str, default='./outputs')
     parser.add_argument('--num_actor', type=int, default=8)
-    parser.add_argument('--prefix', type=str, default=None)
+    parser.add_argument('--n', type=int, default=8, help='Number of trials to run')
     args = parser.parse_args()
+    SAMPLING_PARAMS = SamplingParams(
+    temperature=1.0,
+    top_p=0.7,
+    repetition_penalty=1.05,
+    max_tokens=1024,  # 根据需要调整最大生成长度
+    n=args.n,
+    stop_token_ids=[],  # 停止标志
+)
     main(args)

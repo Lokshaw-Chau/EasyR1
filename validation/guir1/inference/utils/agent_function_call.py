@@ -20,16 +20,11 @@ Use a touchscreen to interact with a mobile device, and take screenshots.
             "action": {
                 "description": """
 The action to perform. The available actions are:
-* `key`: Perform a key event on the mobile device.
-    - This supports adb's `keyevent` syntax.
-    - Examples: "volume_up", "volume_down", "power", "camera", "clear".
 * `click`: Click the point on the screen with coordinate (x, y).
 * `long_press`: Press the point on the screen with coordinate (x, y) for specified seconds.
 * `swipe`: Swipe from the starting point with coordinate (x, y) to the end point with coordinates2 (x2, y2).
 * `type`: Input the specified text into the activated input box.
 * `system_button`: Press the system button.
-* `open`: Open an app on the device.
-* `wait`: Wait specified seconds for the change to happen.
 * `terminate`: Terminate the current task and report its completion status.
 """.strip(),
                 "enum": [
@@ -54,11 +49,11 @@ The action to perform. The available actions are:
                 "type": "array",
             },
             "text": {
-                "description": "Required only by `action=key`, `action=type`, and `action=open`.",
+                "description": "Required only by `action=key`, `action=type`.",
                 "type": "string",
             },
             "time": {
-                "description": "The seconds to wait. Required only by `action=long_press` and `action=wait`.",
+                "description": "The seconds to wait. Required only by `action=long_press`.",
                 "type": "number",
             },
             "button": {
@@ -66,8 +61,7 @@ The action to perform. The available actions are:
                 "enum": [
                     "Back",
                     "Home",
-                    "Menu",
-                    "Enter",
+                    "Menu"
                 ],
                 "type": "string",
             },

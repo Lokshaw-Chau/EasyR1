@@ -60,7 +60,7 @@ def _process_image_worker(args):
 class AndroidControl:
     def __init__(
         self, 
-        model_path,
+        # model_path,
         eval_file, 
         image_root,
         output_dir,
@@ -75,7 +75,7 @@ class AndroidControl:
         # debug=False,
         num_processes=16,
         ):
-        self.model_path = model_path
+        # self.model_path = model_path
         self.eval_file = eval_file
         self.eval_type = eval_type
         self.max_pixels = max_pixels
@@ -392,7 +392,7 @@ class AndroidControl:
         # print(history_len_dict)
         print(json.dumps(res, indent=' '))
 
-        model_name = self.model_path.split('/')[-1]
+        # model_name = self.model_path.split('/')[-1]
         prefix = self.prefix
         # output_dir = os.path.join(self.output_dir, model_name, 'android_control', self.eval_type, prefix)
         output_dir = self.output_dir
@@ -408,7 +408,7 @@ if __name__ == '__main__':
     import argparse
     
     parser = argparse.ArgumentParser(description='Android Control Evaluation')
-    parser.add_argument('--model_path', type=str, required=True, help='Path to the model')
+    # parser.add_argument('--model_path', type=str, required=True, help='Path to the model')
     parser.add_argument('--eval_type', type=str, required=True, choices=['high', 'low'], help='Evaluation type')
     parser.add_argument('--eval_file', type=str, required=True, default='./android_control_test.json', help='Path to the evaluation file')
     parser.add_argument('--image_root', type=str, required=True, default='./', help='Path to the image root')
@@ -421,7 +421,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     
     android_control = AndroidControl(
-        model_path=args.model_path, 
+        # model_path=args.model_path, 
         eval_file=args.eval_file,
         image_root=args.image_root,
         output_dir=args.output_dir,
@@ -433,7 +433,7 @@ if __name__ == '__main__':
     # jobs = android_control.generate_jobs(total_split=args.total_split, split=args.split)
     # jobs = android_control.inference(jobs)
     
-    model_name = args.model_path.split('/')[-1]
+    # model_name = args.model_path.split('/')[-1]
     # prefix = args.prefix
     output_dir = args.output_dir
     # output_dir = os.path.join(args.output_dir, model_name, 'android_control', args.eval_type, prefix)
