@@ -35,6 +35,17 @@ def extract_button(content):
         return action_match.group(1)
     return "no input text"
 
+def extract_status(content):
+    # answer_tag_pattern = r'<tool_call>(.*?)</tool_call>'
+    action_pattern = r"\"status\":\s*\"(.*?)\""
+    # content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
+    # if content_answer_match:
+    #     content_answer = content_answer_match.group(1).strip()
+    action_match = re.search(action_pattern, content)
+    if action_match:
+        return action_match.group(1)
+    return "no input text"
+
 
 def extract_coord(content):
     # Try to find the bbox within <answer> tags, if can not find, return [0, 0, 0, 0]
@@ -108,7 +119,7 @@ def calculate_f1_score(predicted_str, ground_truth_str):
         f1_score = 2 * (precision * recall) / (precision + recall)
     return f1_score
     
-def r1gui_format_reward(predict_str: str) -> float:
+def r1gui_format_reward(predict_str: str, ground_truth: str) -> float:
     """
     检查 predict_str 是否符合 <thinking></thinking><answer></answer> 的格式，
     并验证 <answer> 中的内容是否符合 [{'action': 'action', 'point': '[x,y]', 'input_text': 'no input text'}] 的格式要求。
@@ -126,10 +137,20 @@ def r1gui_format_reward(predict_str: str) -> float:
 
     # 提取 <answer> 内的内容并解析为 JSON 格式
     answer_content = answer_match.group(1).strip()
+    ui_type = json.loads(ground_truth).get("ui_type", "android_control")
     try:
         pred_action = extract_action(answer_content)
         if pred_action is None:
             return 0.0
+        if ui_type == "android_control":
+            if pred_action not in ['click', 'long_press', 'swipe', 'type', 'system_button', 'open', 'wait']:
+                print(f"Invalid action: {pred_action} for ui_type: {ui_type}")
+                return 0.0
+        if ui_type == "gui_odyssey":
+            if pred_action not in ['click', 'long_press', 'swipe', 'type', 'system_button', 'terminate']:
+                print(f"Invalid action: {pred_action} for ui_type: {ui_type}")
+                return 0.0
+
         if pred_action in ['click', 'long_press']:
             coord, valid = extract_coord(predict_str)
             if not valid:
@@ -141,6 +162,10 @@ def r1gui_format_reward(predict_str: str) -> float:
         elif pred_action in ['system_button']:
             button = extract_button(answer_content)
             if button == "no input text":
+                return 0.0
+        elif pred_action in ['terminate']:
+            status = extract_status(answer_content)
+            if status == "no input text":
                 return 0.0
         elif pred_action in ['swipe']:
             pred_coord, valid1 = extract_coord(answer_content)
@@ -169,12 +194,20 @@ def r1gui_accuracy_reward(predict_str: str, ground_truth: str) -> float:
         gt_bbox=ground_truth['gt_bbox']
         gt_input_text=ground_truth['input_text']
         pred_action=extract_action(predict_str).lower()
+        ui_type = ground_truth["ui_type"]
         # pred_input_text=extract_input_text(predict_str)
         # pred_bbox , _ =extract_coord(predict_str)
         
         if pred_action!=gt_action:
             return 0.0
         
+        if ui_type == "android_control":
+            if pred_action not in ['click', 'long_press', 'swipe', 'type', 'system_button', 'open', 'wait']:
+                return 0.0
+        if ui_type == "gui_odyssey":
+            if pred_action not in ['click', 'long_press', 'swipe', 'type', 'system_button', 'terminate']:
+                return 0.0
+
         if gt_action in ["click", "long_press"]:
             pred_bbox , _ =extract_coord(predict_str)
             if len(gt_bbox)==2:
@@ -223,6 +256,13 @@ def r1gui_accuracy_reward(predict_str: str, ground_truth: str) -> float:
                 return 1.0
             else:
                 return 0.0
+        elif pred_action in ['terminate']:
+            pred_status = extract_status(predict_str)
+            if calculate_f1_score(pred_status, gt_input_text)>=0.5:
+                return 1.0
+            else:
+                return 0.0
+        
         elif pred_action in ['wait']:
             return 1.0
         else:
@@ -233,7 +273,7 @@ def r1gui_accuracy_reward(predict_str: str, ground_truth: str) -> float:
         return 0.0
     
 def _compute_score(predict_str: str, ground_truth: str, think_ratio: float = 1.0, training_progress: float = None):
-    format = r1gui_format_reward(predict_str)
+    format = r1gui_format_reward(predict_str, ground_truth)
     accuracy = r1gui_accuracy_reward(predict_str, ground_truth)
     
     # Calculate base score

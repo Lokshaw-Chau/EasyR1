@@ -193,7 +193,7 @@ class MultiModalDataset(Dataset):
         sample = self.data[idx]
         image = sample["image"]
         dummy_image = Image.open(BytesIO(image["bytes"]))
-        text = sample["instruction"]
+        text = sample["step_instruction"]
         history="None" if 'history' not in sample else sample['history']
 
         # sys_prompt='''A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning process and answer are enclosed within <think> </think> nd <answer> </answer> tags, respectively, i.e., <think> reasoning process here </think><answer> answer here </answer>'''
@@ -392,6 +392,7 @@ class Worker:
                         elif pred_action in ['swipe']:
                             pred_coord, _ = extract_coord(generated_text)
                             pred_coord2, _ = extract_coord2(generated_text)
+                            
                             x1, y1 = pred_coord
                             x2, y2 = pred_coord2
                             delta_x = x2 - x1
