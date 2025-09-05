@@ -14,13 +14,13 @@ from io import BytesIO
 from datasets import load_dataset
 from datasets import Dataset as hf_dataset
 
-from qwen_agent.llm.fncall_prompts.nous_fncall_prompt import (
-    NousFnCallPrompt,
-    Message,
-    ContentItem,
-)
+# from qwen_agent.llm.fncall_prompts.nous_fncall_prompt import (
+#     NousFnCallPrompt,
+#     Message,
+#     ContentItem,
+# )
 from qwen_vl_utils import smart_resize
-from utils.agent_function_call import MobileUse
+# from utils.agent_function_call import MobileUse
 import copy
 import base64
 import time
@@ -59,6 +59,43 @@ if not initialize_ray():
 
 # 模型路径
 MODEL_PATH = ""
+
+ODYSSEY_SYS_PROMPT = (
+    "You are a helpful assistant.\n\n"
+    "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n"
+    "<tools>\n{{"
+        "\"type\": \"function\", "
+        "\"function\": {{"
+            "\"name_for_human\": \"mobile_use\", "
+            "\"name\": \"mobile_use\", "
+            "\"description\": \"Use a touchscreen to interact with a mobile device, and take screenshots.\\n" 
+                "* This is an interface to a mobile device with touchscreen. You can perform actions like clicking, typing, swiping, etc.\\n" 
+                "* Some applications may take time to start or process actions, so you may need to wait and take successive screenshots to see the results of your actions.\\n" 
+                "* The screen's resolution is {display_width_px}x{display_height_px}.\\n" 
+                "* Make sure to click any buttons, links, icons, etc with the cursor tip in the center of the element. Don't click boxes on their edges unless asked.\", "
+            "\"parameters\": {{"
+                "\"properties\": {{"
+                    "\"action\": {{"
+                        "\"description\": \"The action to perform. The available actions are:\\n" 
+                        "* `click`: Click the point on the screen with coordinate (x, y).\\n"
+                        "* `long_press`: Press the point on the screen with coordinate (x, y) for specified seconds.\\n"
+                        "* `swipe`: Swipe from the starting point with coordinate (x, y) to the end point with coordinates2 (x2, y2).\\n"
+                        "* `type`: Input the specified text into the activated input box.\\n"
+                        "* `system_button`: Press the system button.\\n"
+                        "* `terminate`: Terminate the current task and report its completion status.\", "
+                        "\"enum\": [\"click\", \"long_press\", \"swipe\", \"type\", \"system_button\", \"terminate\"], \"type\": \"string\"}}, "
+                    "\"coordinate\": {{\"description\": \"(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates to move the mouse to. Required only by `action=click`, `action=long_press`, and `action=swipe`.\", \"type\": \"array\"}}, "
+                    "\"coordinate2\": {{\"description\": \"(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates to move the mouse to. Required only by `action=swipe`.\", \"type\": \"array\"}}, "
+                    "\"text\": {{\"description\": \"Required only by `action=type`.\", \"type\": \"string\"}}, "
+                    "\"time\": {{\"description\": \"The seconds to wait. Required only by `action=long_press`.\", \"type\": \"number\"}}, "
+                    "\"button\": {{\"description\": \"Back means returning to the previous interface, Home means returning to the desktop, Menu means opening the application background menu, and Enter means pressing the enter. Required only by `action=system_button`\", \"enum\": [\"Back\", \"Home\", \"Menu\"], \"type\": \"string\"}}, "
+                    "\"status\": {{\"description\": \"The status of the task. Required only by `action=terminate`.\", \"type\": \"string\", \"enum\": [\"success\", \"failure\"]}}}}, "
+                "\"required\": [\"action\"], "
+                "\"type\": \"object\"}}, "
+            "\"args_format\": \"Format the arguments as a JSON object.\"}}"
+    "}}\n</tools>\n\n"
+    "For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{{\"name\": <function-name>, \"arguments\": <args-json-object>}}\n</tool_call>"
+)
 
 # 推理参数
 SAMPLING_PARAMS = SamplingParams(
@@ -107,6 +144,16 @@ def extract_button(content):
         return action_match.group(1)
     return "no input text"
 
+def extract_status(content):
+    # answer_tag_pattern = r'<tool_call>(.*?)</tool_call>'
+    action_pattern = r"\"status\":\s*\"(.*?)\""
+    # content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
+    # if content_answer_match:
+    #     content_answer = content_answer_match.group(1).strip()
+    action_match = re.search(action_pattern, content)
+    if action_match:
+        return action_match.group(1)
+    return "no input text"
 
 def extract_coord(content):
     # Try to find the bbox within <answer> tags, if can not find, return [0, 0, 0, 0]
@@ -156,7 +203,7 @@ class MultiModalDataset(Dataset):
     def __init__(self, data, processor, prefix=None,):
         self.data = data
         self.processor = processor
-        self.processor.max_pixels=1258291
+        self.processor.max_pixels=6400*28*28
         self.prefix = prefix if prefix else ""
 
     def __len__(self):
@@ -182,30 +229,31 @@ class MultiModalDataset(Dataset):
             factor=self.processor.image_processor.patch_size * self.processor.image_processor.merge_size,
             min_pixels=self.processor.image_processor.min_pixels,
             max_pixels=self.processor.image_processor.max_pixels,)
-        screenspot = MobileUse(
-            cfg={"display_width_px": resized_width, "display_height_px": resized_height}
-        )
+        # screenspot = MobileUse(
+        #     cfg={"display_width_px": resized_width, "display_height_px": resized_height}
+        # )
         img_bytes = image["bytes"]
         b64_str = base64.b64encode(img_bytes).decode("ascii")
         data_uri = f"data:image/png;base64,{b64_str}"
-        nousFnCallPrompt = NousFnCallPrompt()
-        system_message = nousFnCallPrompt.preprocess_fncall_messages(
-            messages = [
-                Message(role="system", content=[ContentItem(text="You are a helpful assistant.")]),
-                # Message(role="user", content=[
-                #     ContentItem(text=user_query),
-                #     ContentItem(image=data_uri)
-                # ]),
-            ],
-            functions=[screenspot.function],
-            lang=None,
-        )
-        system_message = system_message[0].model_dump()
+        # nousFnCallPrompt = NousFnCallPrompt()
+        # system_message = nousFnCallPrompt.preprocess_fncall_messages(
+        #     messages = [
+        #         Message(role="system", content=[ContentItem(text="You are a helpful assistant.")]),
+        #         # Message(role="user", content=[
+        #         #     ContentItem(text=user_query),
+        #         #     ContentItem(image=data_uri)
+        #         # ]),
+        #     ],
+        #     functions=[screenspot.function],
+        #     lang=None,
+        # )
+        # system_message = system_message[0].model_dump()
+
         message=[
             {
                 "role": "system",
                 "content": [
-                    {"type": "text", "text": msg["text"]} for msg in system_message["content"]
+                    {"type": "text", "text": ODYSSEY_SYS_PROMPT.format(display_width_px=resized_width, display_height_px=resized_height)}
                 ],
             },
             {
@@ -329,7 +377,34 @@ class Worker:
                 original_sample["pred_coord"] = [pred_coord[0]*original_sample["scale"][0],pred_coord[1]*original_sample["scale"][1]]
                 pred_action = extract_action(generated_text)
                 original_sample["pred_action"] = pred_action
-                original_sample["pred_input_text"]=extract_input_text(generated_text)
+                # original_sample["pred_input_text"]=extract_input_text(generated_text)
+                if pred_action in ['type','open']:
+                    original_sample["pred_input_text"]=extract_input_text(generated_text)
+                elif pred_action in ['system_button']:
+                    original_sample["pred_input_text"]=extract_button(generated_text)
+                elif pred_action in ['terminate']:
+                    original_sample["pred_input_text"]=extract_status(generated_text)
+                elif pred_action in ['swipe']:
+                    pred_coord2, _ = extract_coord2(generated_text)
+                    original_sample["pred_coord2"] = [pred_coord2[0]*original_sample["scale"][0],pred_coord2[1]*original_sample["scale"][1]]
+                    x1, y1 = pred_coord
+                    x2, y2 = pred_coord2
+                    delta_x = x2 - x1
+                    delta_y = y2 - y1
+                    if abs(delta_x) > abs(delta_y):
+                        if delta_x > 0:
+                            pred_direction = 'right'
+                        else:
+                            pred_direction = 'left'
+                    else:
+                        if delta_y > 0:
+                            pred_direction = 'down'
+                        else:
+                            pred_direction = 'up'
+                    original_sample["pred_input_text"] = pred_direction
+                else:
+                    original_sample["pred_input_text"] = "no input text"
+                    
                 # print(original_sample["pred_input_text"],original_sample["gt_input_text"])
                 original_sample["scale"]= original_sample["scale"]
                 original_sample["image"]=''

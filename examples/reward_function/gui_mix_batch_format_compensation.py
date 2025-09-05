@@ -339,6 +339,30 @@ def _group_wise_format_compensation(scores, ground_truths):
         
     return scores
 
+def _group_wise_collapse_penalty(scores, ground_truths, theta):
+    # group-wise collapse penalty
+    # think_ratio = sum(score["think_ratio"] for score in scores) / len(scores)
+    gt2tr_list = {}
+    for i, score in enumerate(scores):
+        ground_truth = ground_truths[i]
+        if ground_truth not in gt2tr_list:
+            gt2tr_list[ground_truth] = []
+        gt2tr_list[ground_truth].append(score["think_ratio"])
+
+    gt2tr = {k: sum(v) / len(v) for k, v in gt2tr_list.items()}
+    print("gt2tr:", gt2tr)
+
+    for i, score in enumerate(scores):
+        tr = gt2tr[ground_truths[i]] 
+
+        if tr < theta:
+            if score["think_ratio"]<0.5: # no think
+                score["overall"] = score["overall"] - 2
+        if tr > 1-theta:
+            if score["think_ratio"]>=0.5: # think
+                score["overall"] = score["overall"] - 2
+        
+    return scores
 
 def compute_score(predict_strs: list[str], ground_truths: list[str], training_progress: float = None):
     scores = []
@@ -347,6 +371,8 @@ def compute_score(predict_strs: list[str], ground_truths: list[str], training_pr
         scores.append(_compute_score(predict_str, ground_truth, current_think_ratio, None))
 
     scores = _group_wise_format_compensation(scores, ground_truths)
+
+    scores = _group_wise_collapse_penalty(scores, ground_truths, 0.25)
 
     return scores
 
