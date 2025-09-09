@@ -64,9 +64,12 @@ def init_worker():
 
 def make_history(step_pam):
     action = step_pam['action']
-    if action in ['click', 'long_press']:
+    if action in ['click']:
         bbox = step_pam['coordinate']
         step_info = f'{{\"name\": \"mobile_use\", \"arguments\": {{\"action\": \"{action}\", \"coordinate\": {bbox}}}}}'
+    elif action in ['long_press']:
+        bbox = step_pam['coordinate']
+        step_info = f'{{\"name\": \"mobile_use\", \"arguments\": {{\"action\": \"{action}\", \"coordinate\": {bbox}, \"time\": 3}}}}'
     elif action in ['type', 'open']:
         input_txt = step_pam['text']
         step_info = f'{{\"name\": \"mobile_use\", \"arguments\": {{\"action\": \"{action}\", \"text\": \"{input_txt}\"}}}}'
@@ -189,13 +192,13 @@ class AndroidControl:
                         "The thinking process MUST be surrounded <thinking></thinking> tags as follows:\n"
                         "<thinking> ... </thinking> <tool_call>{{\"name\": \"mobile_use\", \"arguments\": {{\"action\": \"...\", ...}}}}</tool_call>\n"
                         "<image>\nThe user query: {goal}\nCurrent step query: {step_instruction}\n"
-                        "Task progress (You have done the following operation on the current device): {task_progress}\n"
+                        # "Task progress (You have done the following operation on the current device): {task_progress}\n"
                     )
                     # user_message_template = "The user query:  {goal}\nCurrent step query: {step_instruction}\nTask progress (You have done the following operation on the current device): {task_progress}"
                     user_message = user_message_template.format(
                         goal=line["episode"]["goal"], 
                         step_instruction=step_instruction, 
-                        task_progress=''.join([f'Step {n+1}: {tp}; ' for n, tp in enumerate(task_progress)])
+                        # task_progress=''.join([f'Step {n+1}: {tp}; ' for n, tp in enumerate(task_progress)])
                     )
                 elif self.eval_type == 'high':
                     user_message_template = (

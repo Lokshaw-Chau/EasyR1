@@ -129,7 +129,10 @@ def r1gui_format_reward(predict_str: str, ground_truth: str) -> float:
     outer_pattern_2 = re.compile(r"<tool_call>.*?</tool_call>", re.DOTALL)
     if not re.fullmatch(outer_pattern_1, predict_str) and not re.fullmatch(outer_pattern_2, predict_str):
         return 0.0
-
+    
+    if '<thinking>' in predict_str and not re.fullmatch(outer_pattern_1, predict_str):
+        return 0.0
+    
     # 提取 <answer> 中的内容
     answer_match = re.search(r"<tool_call>(.*?)</tool_call>", predict_str, re.DOTALL)
     if not answer_match:

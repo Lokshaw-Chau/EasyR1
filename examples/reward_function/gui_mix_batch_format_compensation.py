@@ -372,7 +372,7 @@ def compute_score(predict_strs: list[str], ground_truths: list[str], training_pr
 
     scores = _group_wise_format_compensation(scores, ground_truths)
 
-    scores = _group_wise_collapse_penalty(scores, ground_truths, 0.25)
+    scores = _group_wise_collapse_penalty(scores, ground_truths, 0.3)
 
     return scores
 
