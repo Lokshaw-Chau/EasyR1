@@ -55,13 +55,23 @@ def evaluate(args):
     # ======================================================================== #
 
     score_dict = defaultdict(int)
+    think_cnt = 0
     for pred, gt in zip(prediction, ground_truth):
         category=gt['group']+'-'+gt['gt_action']
         score_dict[category+"_"+"full"] += 1
         # cal for type and step
-
+        if "</thinking>" in pred['pred']:
+            think_cnt += 1
         if gt['gt_action']==pred['pred_action']:
-            score_dict[category] += 1
+            if gt['gt_action'] in ['system_button', 'terminate']:
+                gt_text=gt['gt_input_text']
+                pred_text=pred['pred_input_text']
+                if calculate_f1_score(gt_text,pred_text)>=0.5:
+                    score_dict[category] += 1
+            
+            else:
+                score_dict[category] += 1
+
         if gt['gt_action'] in ['click','long_press','moveto','doubleclick','rightclick']:
             category=gt['group']+'-'+gt['gt_action']+'-'+'grounding'
             gt_bbox=gt['gt_bbox']
@@ -69,8 +79,7 @@ def evaluate(args):
             score_dict[category+"_"+"full"] += 1
             if ((gt_bbox[0]-pred_x)/gt['image_size'][0])**2+((gt_bbox[1]-pred_y)/gt['image_size'][1])**2<0.14**2:
                 score_dict[category] += 1
-            else:
-                print(f"Missed grounding for {gt['gt_action']}: GT bbox {gt_bbox}, Pred coord {pred['pred_coord']}")
+
         if gt['gt_action'] in ['type', 'swipe', 'system_button', 'terminate']:
             category=gt['group']+'-'+gt['gt_action']+'-'+'text'
             gt_text=gt['gt_input_text']
@@ -124,20 +133,22 @@ def evaluate(args):
     logger.info(f"ALL Type : {(full_type_hit / full_type)}")
     logger.info(f"ALL Step : {(full_step_hit / full_step)}")
     logger.info(f"ALL GR : {(full_gr_hit / full_gr)}")
+    logger.info(f"ALL Think : {think_cnt/len(prediction)}")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--prediction_file_path', type=str, default='<prediction_file_path>')
     parser.add_argument('--model_id', type=str, default="<model_id>")
     parser.add_argument('--datasets', type=str, default='')
-    parser.add_argument('--output_path', type=str, default='./outputs/score/')
+    # parser.add_argument('--output_path', type=str, default='./outputs/score/')
     parser.add_argument('--seed', type=int, default=0)
     args = parser.parse_args()
 
-    if not os.path.exists(args.output_path):
-        os.makedirs(args.output_path)
+    output_path = args.prediction_file_path.rsplit('/', 1)[0] + '/score/'
+    if not os.path.exists(output_path):
+        os.makedirs(output_path)
 
-    file_handler = logging.FileHandler(args.output_path + f"score.log", mode='a+')
+    file_handler = logging.FileHandler(output_path + f"score.log", mode='a+')
     file_handler.setLevel(logging.INFO)
 
     console_handler = logging.StreamHandler()
