@@ -344,7 +344,7 @@ def _group_wise_bias(scores, ground_truths):
         gt2tr_list[ground_truth].append(score["think_ratio"])
 
     gt2tr = {k: sum(v) / len(v) for k, v in gt2tr_list.items()}
-    # print("gt2tr:", gt2tr)
+    print("gt2tr:", gt2tr)
 
     for i, score in enumerate(scores):
         tr = gt2tr[ground_truths[i]]

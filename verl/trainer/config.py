@@ -63,6 +63,9 @@ class AlgorithmConfig:
     gamma: float = 1.0
     lam: float = 1.0
     adv_estimator: str = "grpo"
+    ri_schedule: str = "linear"
+    sigmoid_k: float = 10.0
+    sigmoid_x0: float = 0.5
     disable_kl: bool = False
     use_kl_loss: bool = False
     kl_penalty: str = "kl"
@@ -119,6 +122,8 @@ class PPOConfig:
         self.worker.actor.kl_coef = self.algorithm.kl_coef
         self.worker.actor.mode_kl_coef = self.algorithm.mode_kl_coef
         self.worker.actor.think_alpha = self.algorithm.think_alpha
+        self.worker.actor.sigmoid_k = self.algorithm.sigmoid_k
+        self.worker.actor.sigmoid_x0 = self.algorithm.sigmoid_x0
 
     def deep_post_init(self):
         recursive_post_init(self)
