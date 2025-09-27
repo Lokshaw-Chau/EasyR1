@@ -301,6 +301,8 @@ class RayPPOTrainer:
                 )
 
             test_gen_batch.meta_info = self.config.worker.rollout.val_override_config
+            test_gen_batch.meta_info["intervention_think_n"] = 0
+            test_gen_batch.meta_info["intervention_nothink_n"] = 0
             test_gen_batch, pad_size = pad_dataproto_to_divisor(test_gen_batch, self.actor_rollout_wg.world_size)
             test_output_gen_batch = self.actor_rollout_wg.generate_sequences(test_gen_batch)
             test_output_gen_batch = unpad_dataproto(test_output_gen_batch, pad_size=pad_size)
@@ -503,6 +505,27 @@ class RayPPOTrainer:
                 with timer("step", timing_raw):
                     # generate a batch
                     with timer("gen", timing_raw):  # wg: worker group
+                        # dynamic n
+                        if self.config.algorithm.ri_schedule == "linear":
+                            intervention_n = int((1 - self.global_step/self.training_steps) * 8) + 1
+                            intervention_think_n = intervention_n
+                            intervention_nothink_n = intervention_n
+                        elif self.config.algorithm.ri_schedule == "manual":
+                            intervention_think_n = self.config.worker.rollout.intervention_think_n
+                            intervention_nothink_n = self.config.worker.rollout.intervention_no_think_n
+                        elif self.config.algorithm.ri_schedule == "sigmoid":
+
+                            intervention_n = int(9 * (1 - 1 / (1 + np.exp(-self.config.algorithm.sigmoid_k * (self.global_step/self.training_steps - self.config.algorithm.sigmoid_x0)))))
+                            intervention_think_n = intervention_n
+                            intervention_nothink_n = intervention_n
+                        
+                        else:
+                            print(f"Unknown ri_schedule:{self.config.algorithm.ri_schedule}.")
+                            intervention_think_n = 0
+                            intervention_nothink_n = 0
+                        gen_batch.meta_info["intervention_think_n"] = intervention_think_n
+                        gen_batch.meta_info["intervention_nothink_n"] = intervention_nothink_n
+
                         gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
 
                     if self.config.algorithm.adv_estimator == "remax":
@@ -510,6 +533,8 @@ class RayPPOTrainer:
                             gen_baseline_batch = deepcopy(gen_batch)
                             gen_baseline_batch.meta_info["temperature"] = 0
                             gen_baseline_batch.meta_info["n"] = 1
+                            gen_batch.meta_info["intervention_think_n"] = intervention_think_n
+                            gen_batch.meta_info["intervention_nothink_n"] = intervention_nothink_n
                             gen_baseline_output = self.actor_rollout_wg.generate_sequences(gen_baseline_batch)
 
                             batch = batch.union(gen_baseline_output)
@@ -594,6 +619,7 @@ class RayPPOTrainer:
                     # update actor
                     if self.config.trainer.critic_warmup <= self.global_step:
                         with timer("update_actor", timing_raw):
+                            batch.meta_info["training_process"] = self.global_step / self.training_steps
                             actor_output = self.actor_rollout_wg.update_actor(batch)
 
                         actor_metrics = reduce_metrics(actor_output.non_tensor_batch)

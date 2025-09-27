@@ -25,6 +25,7 @@ from ray.experimental.tqdm_ray import tqdm
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers.modeling_flash_attention_utils import index_first_axis, pad_input, unpad_input
+import numpy as np
 
 from ...protocol import DataProto
 from ...trainer import core_algos
@@ -248,8 +249,9 @@ class DataParallelPPOActor(BasePPOActor):
         self.actor_module.train()
 
         temperature = data.meta_info["temperature"]  # temperature must be in the data.meta_info to avoid slient error
+        training_process = data.meta_info["training_process"]
 
-        select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages", "enforce_nothinking"]
+        select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages", "enforce_nothinking", "rollout_prob"]
         if self.config.use_kl_loss and not self.config.disable_kl:
             select_keys.append("ref_log_probs")
 
@@ -283,6 +285,9 @@ class DataParallelPPOActor(BasePPOActor):
                     attention_mask = model_inputs["attention_mask"]
                     response_mask = attention_mask[:, -response_length:]
                     old_log_probs = model_inputs["old_log_probs"]
+                    # rollout_prob = model_inputs['rollout_prob']
+                    # modify old_log_probs[:, 0] to log(0.5)
+                    # old_log_probs[:, 0] = torch.log(rollout_prob)
                     advantages = model_inputs["advantages"]
                     enforce_nothinking = model_inputs['enforce_nothinking']
 
@@ -299,6 +304,8 @@ class DataParallelPPOActor(BasePPOActor):
                     first_t_logprobs = log_probs[~enforce_nothinking, 0]
                     first_t_probs = first_t_logprobs.exp()
 
+                    scaling_factor = self.config.clip_mode_scale_factor * (1 - 1 / (1 + np.exp(-self.config.sigmoid_k * (training_process - self.config.sigmoid_x0))))
+
                     pg_loss, pg_clipfrac_higher, pg_clipfrac_lower, ppo_kl, cond_loss, resp_loss = core_algos.compute_policy_loss(
                         old_log_probs=old_log_probs,
                         log_probs=log_probs,
@@ -306,9 +313,12 @@ class DataParallelPPOActor(BasePPOActor):
                         response_mask=response_mask,
                         clip_ratio_low=self.config.clip_ratio_low,
                         clip_ratio_high=self.config.clip_ratio_high,
+                        clip_ratio_mode_high=self.config.clip_ratio_high+scaling_factor,
+                        clip_ratio_mode_low=self.config.clip_ratio_low+scaling_factor,
                         clip_ratio_dual=self.config.clip_ratio_dual,
                         thinkless_alpha= self.config.think_alpha,
                     )
+
                     if "ref_log_probs" in model_inputs:
                         ref_log_probs = model_inputs["ref_log_probs"]
                         # compute kl loss
@@ -350,6 +360,7 @@ class DataParallelPPOActor(BasePPOActor):
                         # "actor/entropy_bonus": entropy_bonus.detach().item(),
                         "actor/ppo_kl": ppo_kl.detach().item(),
                         "actor/cond_loss": cond_loss.mean().detach().item(),
+                        "actor/clip_ratio_mode_high": self.config.clip_ratio_high+scaling_factor,
                     }
                     # Add conditional checks for non-empty tensors
                     if len(first_eot_probs) > 0:

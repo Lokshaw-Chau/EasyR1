@@ -27,6 +27,7 @@ import torch
 import torch.nn.functional as F
 
 from ..utils import torch_functional as VF
+from copy import deepcopy
 
 
 if TYPE_CHECKING:
@@ -417,6 +418,8 @@ def compute_policy_loss(
     response_mask: torch.Tensor,
     clip_ratio_low: float,
     clip_ratio_high: float,
+    clip_ratio_mode_high: float,
+    clip_ratio_mode_low: float,
     clip_ratio_dual: float,
     thinkless_alpha: float,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -455,9 +458,18 @@ def compute_policy_loss(
     # clamp the ratio before exp to avoid nan
     # see: https://github.com/pytorch/pytorch/issues/10729
     ratio = torch.exp(negative_approx_kl)
-    clipped_ratio = torch.exp(
-        torch.clamp(negative_approx_kl, np.log(1.0 - clip_ratio_low), np.log(1.0 + clip_ratio_high))
+
+    think_clipped_ratio = torch.exp(
+        torch.clamp(negative_approx_kl[:,0], np.log(1 - clip_ratio_mode_low), np.log(1 + clip_ratio_mode_high))
     )
+
+    think_clipped_ratio = think_clipped_ratio.unsqueeze(1)
+
+    clipped_ratio = torch.exp(
+        torch.clamp(negative_approx_kl[:,1:], np.log(1.0 - clip_ratio_low), np.log(1.0 + clip_ratio_high))
+    )
+
+    clipped_ratio = torch.cat((think_clipped_ratio, clipped_ratio), dim=1)
 
     pg_loss = -advantages * ratio
     pg_loss2 = -advantages * clipped_ratio

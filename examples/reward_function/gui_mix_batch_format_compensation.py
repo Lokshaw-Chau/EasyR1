@@ -129,7 +129,8 @@ def r1gui_format_reward(predict_str: str, ground_truth: str) -> float:
     outer_pattern_2 = re.compile(r"<tool_call>.*?</tool_call>", re.DOTALL)
     if not re.fullmatch(outer_pattern_1, predict_str) and not re.fullmatch(outer_pattern_2, predict_str):
         return 0.0
-
+    if '<thinking>' in predict_str and not re.fullmatch(outer_pattern_1, predict_str):
+        return 0.0
     # 提取 <answer> 中的内容
     answer_match = re.search(r"<tool_call>(.*?)</tool_call>", predict_str, re.DOTALL)
     if not answer_match:
@@ -275,7 +276,9 @@ def r1gui_accuracy_reward(predict_str: str, ground_truth: str) -> float:
 def _compute_score(predict_str: str, ground_truth: str, think_ratio: float = 1.0, training_progress: float = None):
     format = r1gui_format_reward(predict_str, ground_truth)
     accuracy = r1gui_accuracy_reward(predict_str, ground_truth)
-    
+    if "<thinking>" not in predict_str:
+        if accuracy < 0:
+            base_score -= 1
     # Calculate base score
     base_score = accuracy + format
     mode_ratio = think_ratio if "<thinking>" in predict_str else 1 - think_ratio
@@ -371,9 +374,6 @@ def compute_score(predict_strs: list[str], ground_truths: list[str], training_pr
         scores.append(_compute_score(predict_str, ground_truth, current_think_ratio, None))
 
     scores = _group_wise_format_compensation(scores, ground_truths)
-
-    scores = _group_wise_collapse_penalty(scores, ground_truths, 0.3)
-
     return scores
 
 if __name__ == "__main__":

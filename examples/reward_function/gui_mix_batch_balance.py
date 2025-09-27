@@ -308,31 +308,18 @@ def think_ratio(predict_strs: list[str]):
     
     return think_count / total_count
 
-def _group_wise_format_compensation(scores, ground_truths):
-    # group-wise format_compensation
-    gt2format_list = {}
-    for i, score in enumerate(scores):
-        ground_truth = ground_truths[i]
-        if ground_truth not in gt2format_list:
-            gt2format_list[ground_truth] = []
-        gt2format_list[ground_truth].append([score["format"], score["think_ratio"]])
-
-    gt2format_diff = {}
-    for k, v in gt2format_list.items():
-        think_format = [x[0] for x in v if x[1] >= 0.5]
-        no_think_format = [x[0] for x in v if x[1] < 0.5]
-        if len(think_format) == 0:
-            think_format = [0]
-        if len(no_think_format) == 0:
-            no_think_format = [0]
-        gt2format_diff[k] = sum(think_format) / len(think_format) - sum(no_think_format) / len(no_think_format)
-
-    print("gt2format_diff:", gt2format_diff)
-    for i, score in enumerate(scores):
-        diff = gt2format_diff[ground_truths[i]]
-        if score["think_ratio"] > 0.5:  # think
-            score["overall"] = score["overall"] - diff
-        
+def _batch_wise_penalty_reward(scores, ground_truths, gamma):
+    think_ratio = sum(score["think_ratio"] for score in scores) / len(scores)
+    if think_ratio < gamma:
+        for score in scores:
+            if score["think_ratio"] < 0.5:
+                score["overall"] -= 2
+    elif think_ratio > 1 - gamma:
+        for score in scores:
+            if score["think_ratio"] >= 0.5:
+                score["overall"] -= 2
+    else:
+        print("No batch-wise penalty applied, think_ratio:", think_ratio)
     return scores
 
 def _group_wise_bias(scores, ground_truths):
@@ -358,6 +345,8 @@ def compute_score(predict_strs: list[str], ground_truths: list[str], training_pr
     for predict_str, ground_truth in zip(predict_strs, ground_truths):
         scores.append(_compute_score(predict_str, ground_truth, current_think_ratio, None))
     
+    scores = _batch_wise_penalty_reward(scores, ground_truths, gamma=0.1)
+
     scores = _group_wise_bias(scores, ground_truths)
 
     return scores

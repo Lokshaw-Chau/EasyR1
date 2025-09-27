@@ -129,6 +129,16 @@ class vLLMRollout(BaseRollout):
 
     @torch.no_grad()
     def generate_sequences(self, prompts: DataProto) -> DataProto:
+        intervention_think_n = prompts.meta_info.get("intervention_think_n", 0)
+        intervention_nothink_n = prompts.meta_info.get("intervention_nothink_n", 0)
+        if intervention_think_n + intervention_nothink_n > self.sampling_params.n:
+            raise ValueError(
+                f"intervention_think_n + intervention_nothink_n should be less than or equal to n, "
+                f"but got {intervention_think_n} + {intervention_nothink_n} > {self.sampling_params.n}."
+            )
+        prompts.meta_info.pop("intervention_think_n", None)
+        prompts.meta_info.pop("intervention_nothink_n", None)
+        
         # left-padded attention_mask
         input_ids: torch.Tensor = prompts.batch["input_ids"]  # (bs, prompt_length)
         attention_mask: torch.Tensor = prompts.batch["attention_mask"]
@@ -158,8 +168,12 @@ class vLLMRollout(BaseRollout):
                     prompts=vllm_inputs, sampling_params=self.sampling_params, use_tqdm=(self.rank == 0)
                 )
                 response_ids = [output.token_ids for completion in completions for output in completion.outputs]
+                rollout_prob = [1.0 / self.sampling_params.n] * len(response_ids)
 
             else:
+                print("Using rollout intervention with intervention_nothink_n:", intervention_nothink_n, "and intervention_think_n:", intervention_think_n)
+                self.intervention_no_think_n = intervention_nothink_n
+                self.intervention_think_n = intervention_think_n
                 no_intervention_n = self.sampling_params.n - self.intervention_no_think_n - self.intervention_think_n
                 if no_intervention_n > 0:
                     sampling_params_nointervention = deepcopy(self.sampling_params)
@@ -206,23 +220,39 @@ class vLLMRollout(BaseRollout):
                     completions_thinking = [[] for _ in range(len(vllm_inputs))]
                 
                 response_ids = []
+                rollout_prob = []
                 assert len(completions_nothinking) == len(completions_thinking) == len(completions_nointervention), f"{len(completions_nothinking)} != {len(completions_thinking)}"
                 for completion_nointervention, completion_nothinking, completion_thinking in zip(
                     completions_nointervention, completions_nothinking, completions_thinking
                 ):
+                    if completion_nointervention != [] and completion_nothinking != []:
+                        no_think_ratio = (len(completion_nothinking.outputs)+len([sample_id for sample_id in range(len(completion_nointervention.outputs)) if completion_nointervention.outputs[sample_id].token_ids[0] == 151657])) / self.sampling_params.n
+                    elif completion_nointervention != [] and completion_nothinking == []:
+                        no_think_ratio = len([sample_id for sample_id in range(len(completion_nointervention.outputs)) if completion_nointervention.outputs[sample_id].token_ids[0] == 151657]) / self.sampling_params.n
+                    elif completion_nointervention == [] and completion_nothinking != []:
+                        no_think_ratio = len(completion_nothinking.outputs) / self.sampling_params.n
+                    else:
+                        no_think_ratio = 0
+                    think_ratio = 1 - no_think_ratio
                     if completion_thinking != []:
                         for sample_id in range(len(completion_thinking.outputs)):
                             response_ids.append([13708] + completion_thinking.outputs[sample_id].token_ids)
+                            rollout_prob.append(think_ratio)
                     else:
                         print("No thinking output!")
                     if completion_nothinking != []:
                         for sample_id in range(len(completion_nothinking.outputs)):
                             response_ids.append([151657] + completion_nothinking.outputs[sample_id].token_ids)
+                            rollout_prob.append(no_think_ratio)
                     else:
                         print("No not thinking output!")
                     if completion_nointervention != []:
                         for sample_id in range(len(completion_nointervention.outputs)):
                             response_ids.append(completion_nointervention.outputs[sample_id].token_ids)
+                            if completion_nointervention.outputs[sample_id].token_ids[0] == 151657:
+                                rollout_prob.append(no_think_ratio)
+                            else:
+                                rollout_prob.append(think_ratio)
                     else:
                         print("No no intervention output!")
                 
@@ -247,6 +277,7 @@ class vLLMRollout(BaseRollout):
                 ).to(input_ids.device)
             
             enforce_nothinking = torch.tensor(enforce_nothinking).to(input_ids.device)
+            rollout_prob = torch.tensor(rollout_prob).to(input_ids.device)
             if self.sampling_params.n > 1:
                 batch_size = batch_size * self.sampling_params.n
                 input_ids = _repeat_interleave(input_ids, self.sampling_params.n)
@@ -279,7 +310,8 @@ class vLLMRollout(BaseRollout):
                 "attention_mask": attention_mask,
                 "response_mask": response_mask,
                 "position_ids": position_ids,
-                'enforce_nothinking': enforce_nothinking
+                'enforce_nothinking': enforce_nothinking,
+                'rollout_prob': rollout_prob,
             },
             batch_size=batch_size,
         )

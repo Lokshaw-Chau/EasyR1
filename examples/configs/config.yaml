@@ -18,6 +18,7 @@ data:
 
 algorithm:
   adv_estimator: grpo
+  ri_schedule: linear
   disable_kl: true
   use_kl_loss: false
   kl_penalty: low_var_kl

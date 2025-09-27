@@ -109,7 +109,7 @@ SAMPLING_PARAMS = SamplingParams(
 DATA_PATH = ""
 
 # 微批大小
-MICRO_BATCH = 2
+MICRO_BATCH = 4
 
 def extract_action(content):
     # answer_tag_pattern = r'<tool_call>(.*?)</tool_call>'
