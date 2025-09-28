@@ -42,14 +42,12 @@ WEB_SYS_PROMPT = (
                     "* `middle_click`: Click the middle mouse button.\\n" 
                     "* `double_click`: Double-click the left mouse button.\\n" 
                     "* `scroll`: Performs a scroll of the mouse scroll wheel.\\n" 
-                    "* `wait`: Wait specified seconds for the change to happen.\\n" 
                     "* `terminate`: Terminate the current task and report its completion status.\", " 
                     "\"enum\": [\"key\", \"type\", \"mouse_move\", \"left_click\", \"left_click_drag\", \"right_click\", \"middle_click\", \"double_click\", \"scroll\", \"wait\", \"terminate\"], \"type\": \"string\"}}, " 
                 "\"keys\": {{\"description\": \"Required only by `action=key`.\", \"type\": \"array\"}}, " 
                 "\"text\": {{\"description\": \"Required only by `action=type`.\", \"type\": \"string\"}}, " 
                 "\"coordinate\": {{\"description\": \"(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates to move the mouse to. Required only by `action=mouse_move` and `action=left_click_drag`.\", \"type\": \"array\"}}, " 
                 "\"pixels\": {{\"description\": \"The amount of scrolling to perform. Positive values scroll up, negative values scroll down. Required only by `action=scroll`.\", \"type\": \"number\"}}, " 
-                "\"time\": {{\"description\": \"The seconds to wait. Required only by `action=wait`.\", \"type\": \"number\"}}, " 
                 "\"status\": {{\"description\": \"The status of the task. Required only by `action=terminate`.\", \"type\": \"string\", \"enum\": [\"success\", \"failure\"]}}}}, " 
             "\"required\": [\"action\"], " 
             "\"type\": \"object\"}}, " 
@@ -177,7 +175,7 @@ class Qwen25VLAda(BaseAgent):
         instruction_prompt = (
             "You may conduct step-by-step reasoning to help you better solve the problem before the <tool_call></tool_call> XML tags."
             "The thinking process MUST be surrounded <thinking></thinking> tags as follows:\n"
-            "<thinking> ... </thinking> <tool_call>{\"name\": \"...\", \"arguments\": {\"action\": \"...\", ...}}</tool_call>\n"
+            "<thinking> ... </thinking> <tool_call>{\"name\": \"computer_use\", \"arguments\": {\"action\": \"...\", ...}}</tool_call>\n"
             f"The user query: {trajectory['high_level_task_description']}\n"
             f"Task progress (You have done the following operation on the current device): {previous_actions_str}\n"
         )
@@ -205,7 +203,7 @@ class Qwen25VLAda(BaseAgent):
                 {
                     "role": "user", 
                     "content": [
-                        # {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}},
                         {"type": "text", "text": instruction_prompt}
                     ]
                 }

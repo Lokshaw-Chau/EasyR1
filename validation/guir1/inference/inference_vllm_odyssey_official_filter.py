@@ -14,13 +14,8 @@ from io import BytesIO
 from datasets import load_dataset
 from datasets import Dataset as hf_dataset
 
-from qwen_agent.llm.fncall_prompts.nous_fncall_prompt import (
-    NousFnCallPrompt,
-    Message,
-    ContentItem,
-)
 from qwen_vl_utils import smart_resize
-from utils.agent_function_call import MobileUse
+
 import copy
 import base64
 import time
@@ -60,6 +55,42 @@ if not initialize_ray():
 # 模型路径
 MODEL_PATH = ""
 
+ODYSSEY_SYS_PROMPT = (
+    "You are a helpful assistant.\n\n"
+    "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n"
+    "<tools>\n{{"
+        "\"type\": \"function\", "
+        "\"function\": {{"
+            "\"name_for_human\": \"mobile_use\", "
+            "\"name\": \"mobile_use\", "
+            "\"description\": \"Use a touchscreen to interact with a mobile device, and take screenshots.\\n" 
+                "* This is an interface to a mobile device with touchscreen. You can perform actions like clicking, typing, swiping, etc.\\n" 
+                "* Some applications may take time to start or process actions, so you may need to wait and take successive screenshots to see the results of your actions.\\n" 
+                "* The screen's resolution is {display_width_px}x{display_height_px}.\\n" 
+                "* Make sure to click any buttons, links, icons, etc with the cursor tip in the center of the element. Don't click boxes on their edges unless asked.\", "
+            "\"parameters\": {{"
+                "\"properties\": {{"
+                    "\"action\": {{"
+                        "\"description\": \"The action to perform. The available actions are:\\n" 
+                        "* `click`: Click the point on the screen with coordinate (x, y).\\n"
+                        "* `long_press`: Press the point on the screen with coordinate (x, y) for specified seconds.\\n"
+                        "* `swipe`: Swipe from the starting point with coordinate (x, y) to the end point with coordinates2 (x2, y2).\\n"
+                        "* `type`: Input the specified text into the activated input box.\\n"
+                        "* `system_button`: Press the system button.\\n"
+                        "* `terminate`: Terminate the current task and report its completion status.\", "
+                        "\"enum\": [\"click\", \"long_press\", \"swipe\", \"type\", \"system_button\", \"terminate\"], \"type\": \"string\"}}, "
+                    "\"coordinate\": {{\"description\": \"(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates to move the mouse to. Required only by `action=click`, `action=long_press`, and `action=swipe`.\", \"type\": \"array\"}}, "
+                    "\"coordinate2\": {{\"description\": \"(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates to move the mouse to. Required only by `action=swipe`.\", \"type\": \"array\"}}, "
+                    "\"text\": {{\"description\": \"Required only by `action=type`.\", \"type\": \"string\"}}, "
+                    "\"button\": {{\"description\": \"Back means returning to the previous interface, Home means returning to the desktop, Menu means opening the application background menu, and Enter means pressing the enter. Required only by `action=system_button`\", \"enum\": [\"Back\", \"Home\", \"Menu\"], \"type\": \"string\"}}, "
+                    "\"status\": {{\"description\": \"The status of the task. Required only by `action=terminate`.\", \"type\": \"string\", \"enum\": [\"success\", \"failure\"]}}}}, "
+                "\"required\": [\"action\"], """
+                "\"type\": \"object\"}}, "
+            "\"args_format\": \"Format the arguments as a JSON object.\"}}"
+    "}}\n</tools>\n\n"
+    "For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{{\"name\": <function-name>, \"arguments\": <args-json-object>}}\n</tool_call>"
+)
+
 # 推理参数
 # SAMPLING_PARAMS = SamplingParams(
 #     temperature=0.0,
@@ -72,7 +103,7 @@ MODEL_PATH = ""
 DATA_PATH = ""
 
 # 微批大小
-MICRO_BATCH = 6
+MICRO_BATCH = 4
 
 def extract_action(content):
     # answer_tag_pattern = r'<tool_call>(.*?)</tool_call>'
@@ -88,6 +119,17 @@ def extract_action(content):
 def extract_input_text(content):
     # answer_tag_pattern = r'<tool_call>(.*?)</tool_call>'
     action_pattern = r"\"text\":\s*\"(.*?)\""
+    # content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
+    # if content_answer_match:
+    #     content_answer = content_answer_match.group(1).strip()
+    action_match = re.search(action_pattern, content)
+    if action_match:
+        return action_match.group(1)
+    return "no input text"
+
+def extract_status(content):
+    # answer_tag_pattern = r'<tool_call>(.*?)</tool_call>'
+    action_pattern = r"\"status\":\s*\"(.*?)\""
     # content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
     # if content_answer_match:
     #     content_answer = content_answer_match.group(1).strip()
@@ -209,30 +251,14 @@ class MultiModalDataset(Dataset):
             factor=self.processor.image_processor.patch_size * self.processor.image_processor.merge_size,
             min_pixels=self.processor.image_processor.min_pixels,
             max_pixels=self.processor.image_processor.max_pixels,)
-        screenspot = MobileUse(
-            cfg={"display_width_px": resized_width, "display_height_px": resized_height}
-        )
         img_bytes = image["bytes"]
         b64_str = base64.b64encode(img_bytes).decode("ascii")
         data_uri = f"data:image/png;base64,{b64_str}"
-        nousFnCallPrompt = NousFnCallPrompt()
-        system_message = nousFnCallPrompt.preprocess_fncall_messages(
-            messages = [
-                Message(role="system", content=[ContentItem(text="You are a helpful assistant.")]),
-                # Message(role="user", content=[
-                #     ContentItem(text=user_query),
-                #     ContentItem(image=data_uri)
-                # ]),
-            ],
-            functions=[screenspot.function],
-            lang=None,
-        )
-        system_message = system_message[0].model_dump()
         message=[
             {
                 "role": "system",
                 "content": [
-                    {"type": "text", "text": msg["text"]} for msg in system_message["content"]
+                    {"type": "text", "text": ODYSSEY_SYS_PROMPT.format(display_width_px=resized_width, display_height_px=resized_height)},
                 ],
             },
             {
@@ -381,8 +407,14 @@ class Worker:
                                 flags.append(True)
                             else:
                                 flags.append(False)
-                        elif pred_action in ['open','type', 'terminate']:
+                        elif pred_action in ['type']:
                             pred_input_text = extract_input_text(generated_text)
+                            if calculate_f1_score(pred_input_text, original_sample['gt_input_text'])>=0.5:
+                                flags.append(True)
+                            else:
+                                flags.append(False)
+                        elif pred_action in ['terminate']:
+                            pred_input_text = extract_status(generated_text)
                             if calculate_f1_score(pred_input_text, original_sample['gt_input_text'])>=0.5:
                                 flags.append(True)
                             else:
@@ -396,11 +428,10 @@ class Worker:
                         elif pred_action in ['swipe']:
                             pred_coord, _ = extract_coord(generated_text)
                             pred_coord2, _ = extract_coord2(generated_text)
-                            x1, y1 = pred_coord
-                            x2, y2 = pred_coord2
+                            x1, y1 = pred_coord[0:2]
+                            x2, y2 = pred_coord2[0:2]
                             delta_x = x2 - x1
                             delta_y = y2 - y1
-
 
                             if abs(delta_x) > abs(delta_y):
                                 if delta_x > 0:
@@ -451,23 +482,30 @@ def main(args):
     OUTPUT_DIR = os.path.join(OUTPUT_DIR,MODEL_PATH.split('/')[-1])
     NEW_FILE = os.path.join(OUTPUT_DIR, DATA_PATH.split("/")[-1].replace(".jsonl", "_pred.jsonl").replace('.parquet',f'_{args.n}.json'))
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    # filter data
-    if args.n != 1:
-        old_file = NEW_FILE.replace(f'_{args.n}.json', f'_{args.n//2}.json')
-        with open(old_file, "r") as f:
-            old_file_data = [json.loads(line) for line in f.readlines()]
-        new_data_id_list = []
-        for item in old_file_data:
-            think_pass_list = item['<thinking>_pass']
-            tool_call_pass_list = item['<tool_call>_pass']
-            if any(think_pass_list) and any(tool_call_pass_list):
-                continue
-            new_data_id_list.append(item['instruction']+str(item['gt_bbox'])+item['gt_input_text']+item['gt_action']+item['history'])
-
-        # if id not in new_data_id_list, drop the sample
-        data = [item for item in data if (item['instruction']+str(item['gt_bbox'])+item['gt_input_text']+item['gt_action']+item['history']) in new_data_id_list]
+    if os.path.exists(NEW_FILE):
+        with open(NEW_FILE, "r") as f:
+            existing_data = [json.loads(line) for line in f.readlines()]
+        existing_ids = set(item['index'] for item in existing_data if 'index' in item)
+        data = [item for item in data if item['index'] not in existing_ids]
         data = hf_dataset.from_list(data)
-        print(f"Filtered data size: {len(data)}")
+        print(f"Resuming from existing file. Remaining data size: {len(data)}")
+    # filter data
+    # if args.n != 1:
+    #     old_file = NEW_FILE.replace(f'_{args.n}.json', f'_{args.n//2}.json')
+    #     with open(old_file, "r") as f:
+    #         old_file_data = [json.loads(line) for line in f.readlines()]
+    #     new_data_id_list = []
+    #     for item in old_file_data:
+    #         think_pass_list = item['<thinking>_pass']
+    #         tool_call_pass_list = item['<tool_call>_pass']
+    #         if any(think_pass_list) and any(tool_call_pass_list):
+    #             continue
+    #         new_data_id_list.append(item['instruction']+str(item['gt_bbox'])+item['gt_input_text']+item['gt_action']+item['history'])
+
+    #     # if id not in new_data_id_list, drop the sample
+    #     data = [item for item in data if (item['instruction']+str(item['gt_bbox'])+item['gt_input_text']+item['gt_action']+item['history']) in new_data_id_list]
+    #     data = hf_dataset.from_list(data)
+    #     print(f"Filtered data size: {len(data)}")
     
     data_chunks = [hf_dataset.from_dict(data[i::num_actors]) for i in range(num_actors)]
 
@@ -506,7 +544,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     SAMPLING_PARAMS = SamplingParams(
     temperature=1.0,
-    top_p=0.7,
+    top_p=0.999,
     repetition_penalty=1.05,
     max_tokens=1024,  # 根据需要调整最大生成长度
     n=args.n,

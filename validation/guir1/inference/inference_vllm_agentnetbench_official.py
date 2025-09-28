@@ -60,40 +60,44 @@ if not initialize_ray():
 # 模型路径
 MODEL_PATH = ""
 
-ODYSSEY_SYS_PROMPT = (
+WEB_SYS_PROMPT = (
     "You are a helpful assistant.\n\n"
-    "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n"
-    "<tools>\n{{"
-        "\"type\": \"function\", "
-        "\"function\": {{"
-            "\"name_for_human\": \"mobile_use\", "
-            "\"name\": \"mobile_use\", "
-            "\"description\": \"Use a touchscreen to interact with a mobile device, and take screenshots.\\n" 
-                "* This is an interface to a mobile device with touchscreen. You can perform actions like clicking, typing, swiping, etc.\\n" 
-                "* Some applications may take time to start or process actions, so you may need to wait and take successive screenshots to see the results of your actions.\\n" 
-                "* The screen's resolution is {display_width_px}x{display_height_px}.\\n" 
-                "* Make sure to click any buttons, links, icons, etc with the cursor tip in the center of the element. Don't click boxes on their edges unless asked.\", "
-            "\"parameters\": {{"
-                "\"properties\": {{"
-                    "\"action\": {{"
-                        "\"description\": \"The action to perform. The available actions are:\\n" 
-                        "* `click`: Click the point on the screen with coordinate (x, y).\\n"
-                        "* `long_press`: Press the point on the screen with coordinate (x, y) for specified seconds.\\n"
-                        "* `swipe`: Swipe from the starting point with coordinate (x, y) to the end point with coordinates2 (x2, y2).\\n"
-                        "* `type`: Input the specified text into the activated input box.\\n"
-                        "* `system_button`: Press the system button.\\n"
-                        "* `terminate`: Terminate the current task and report its completion status.\", "
-                        "\"enum\": [\"click\", \"long_press\", \"swipe\", \"type\", \"system_button\", \"terminate\"], \"type\": \"string\"}}, "
-                    "\"coordinate\": {{\"description\": \"(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates to move the mouse to. Required only by `action=click`, `action=long_press`, and `action=swipe`.\", \"type\": \"array\"}}, "
-                    "\"coordinate2\": {{\"description\": \"(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates to move the mouse to. Required only by `action=swipe`.\", \"type\": \"array\"}}, "
-                    "\"text\": {{\"description\": \"Required only by `action=type`.\", \"type\": \"string\"}}, "
-                    "\"time\": {{\"description\": \"The seconds to wait. Required only by `action=long_press`.\", \"type\": \"number\"}}, "
-                    "\"button\": {{\"description\": \"Back means returning to the previous interface, Home means returning to the desktop, Menu means opening the application background menu, and Enter means pressing the enter. Required only by `action=system_button`\", \"enum\": [\"Back\", \"Home\", \"Menu\"], \"type\": \"string\"}}, "
-                    "\"status\": {{\"description\": \"The status of the task. Required only by `action=terminate`.\", \"type\": \"string\", \"enum\": [\"success\", \"failure\"]}}}}, "
-                "\"required\": [\"action\"], "
-                "\"type\": \"object\"}}, "
-            "\"args_format\": \"Format the arguments as a JSON object.\"}}"
-    "}}\n</tools>\n\n"
+    "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n" 
+    "<tools>\n{{" 
+        "\"type\": \"function\", " 
+        "\"function\": {{" 
+            "\"name_for_human\": \"computer_use\", " 
+            "\"name\": \"computer_use\", " 
+            "\"description\": \"Use a mouse and keyboard to interact with a computer, and take screenshots.\\n" 
+            "* This is an interface to a desktop GUI. You do not have access to a terminal or applications menu. You must click on desktop icons to start applications.\\n" 
+            "* Some applications may take time to start or process actions, so you may need to wait and take successive screenshots to see the results of your actions. E.g. if you click on Firefox and a window doesn't open, try wait and taking another screenshot.\\n" 
+            "* The screen's resolution is {display_width_px}x{display_height_px}.\\n" 
+            "* Whenever you intend to move the cursor to click on an element like an icon, you should consult a screenshot to determine the coordinates of the element before moving the cursor.\\n" 
+            "* If you tried clicking on a program or link but it failed to load, even after waiting, try adjusting your cursor position so that the tip of the cursor visually falls on the element that you want to click.\\n" 
+            "* Make sure to click any buttons, links, icons, etc with the cursor tip in the center of the element. Don't click boxes on their edges unless asked.\", " 
+        "\"parameters\": {{" 
+            "\"properties\": {{" 
+                "\"action\": {{" 
+                    "\"description\": \"The action to perform. The available actions are:\\n" 
+                    "* `key`: Performs key down presses on the arguments passed in order, then performs key releases in reverse order.\\n" 
+                    "* `type`: Type a string of text on the keyboard.\\n" 
+                    "* `mouse_move`: Move the cursor to a specified (x, y) pixel coordinate on the screen.\\n" 
+                    "* `left_click`: Click the left mouse button.\\n"
+                    "* `left_click_drag`: Click and drag the cursor to a specified (x, y) pixel coordinate on the screen.\\n" 
+                    "* `right_click`: Click the right mouse button.\\n" 
+                    "* `double_click`: Double-click the left mouse button.\\n" 
+                    "* `scroll`: Performs a scroll of the mouse scroll wheel.\\n" 
+                    "* `terminate`: Terminate the current task and report its completion status.\", " 
+                    "\"enum\": [\"key\", \"type\", \"mouse_move\", \"left_click\", \"left_click_drag\", \"right_click\", \"double_click\", \"scroll\", \"terminate\"], \"type\": \"string\"}}, " 
+                "\"keys\": {{\"description\": \"Required only by `action=key`.\", \"type\": \"array\"}}, " 
+                "\"text\": {{\"description\": \"Required only by `action=type`.\", \"type\": \"string\"}}, " 
+                "\"coordinate\": {{\"description\": \"(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates to move the mouse to. Required only by `action=left_click`, `action=right_click`, `action=double_click`, `action=middle_click`, `action=mouse_move` and `action=left_click_drag`.\", \"type\": \"array\"}}, " 
+                "\"pixels\": {{\"description\": \"The amount of scrolling to perform. Positive values scroll up, negative values scroll down. Required only by `action=scroll`.\", \"type\": \"number\"}}, " 
+                "\"status\": {{\"description\": \"The status of the task. Required only by `action=terminate`.\", \"type\": \"string\", \"enum\": [\"success\", \"failure\"]}}}}, " 
+            "\"required\": [\"action\"], " 
+            "\"type\": \"object\"}}, " 
+        "\"args_format\": \"Format the arguments as a JSON object.\"}}" 
+    "}}\n</tools>\n\n" 
     "For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{{\"name\": <function-name>, \"arguments\": <args-json-object>}}\n</tool_call>"
 )
 
@@ -198,7 +202,18 @@ def extract_coord2(content):
         return [0, 0, 0, 0], False
     except:
         return [0, 0, 0, 0], False
-    
+
+def extract_keys(content):
+    # answer_tag_pattern = r'<tool_call>(.*?)</tool_call>'
+    action_pattern = r"\"keys\":\s*(.*?)\s*\}"
+    # content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
+    # if content_answer_match:
+    #     content_answer = content_answer_match.group(1).strip()
+    action_match = re.search(action_pattern, content)
+    if action_match:
+        return action_match.group(1)
+    return "no input text"
+
 class MultiModalDataset(Dataset):
     def __init__(self, data, processor, prefix=None):
         self.data = data
@@ -220,7 +235,7 @@ class MultiModalDataset(Dataset):
         user_query = (
                 "You may conduct step-by-step reasoning to help you better solve the problem before the <tool_call></tool_call> XML tags."
                 "The thinking process MUST be surrounded <thinking></thinking> tags as follows:\n"
-                "<thinking> ... </thinking> <tool_call>{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"...\", ...}}</tool_call>\n"
+                "<thinking> ... </thinking> <tool_call>{\"name\": \"computer_use\", \"arguments\": {\"action\": \"...\", ...}}</tool_call>\n"
                 f"<image>\nThe user query: {text}\n"
                 f"Task progress (You have done the following operation on the current device): {history}\n"
             )
@@ -253,7 +268,7 @@ class MultiModalDataset(Dataset):
             {
                 "role": "system",
                 "content": [
-                    {"type": "text", "text": ODYSSEY_SYS_PROMPT.format(display_width_px=resized_width, display_height_px=resized_height)}
+                    {"type": "text", "text": WEB_SYS_PROMPT.format(display_width_px=resized_width, display_height_px=resized_height)}
                 ],
             },
             {
@@ -373,39 +388,6 @@ class Worker:
                 print(generated_text)
                 # gt_bbox = original_sample["gt_bbox"]
                 original_sample["pred"] = generated_text
-                pred_coord, _ = extract_coord(generated_text)
-                original_sample["pred_coord"] = [pred_coord[0]*original_sample["scale"][0],pred_coord[1]*original_sample["scale"][1]]
-                pred_action = extract_action(generated_text)
-                original_sample["pred_action"] = pred_action
-                # original_sample["pred_input_text"]=extract_input_text(generated_text)
-                if pred_action in ['type','open']:
-                    original_sample["pred_input_text"]=extract_input_text(generated_text)
-                elif pred_action in ['system_button']:
-                    original_sample["pred_input_text"]=extract_button(generated_text)
-                elif pred_action in ['terminate']:
-                    original_sample["pred_input_text"]=extract_status(generated_text)
-                elif pred_action in ['swipe']:
-                    pred_coord2, _ = extract_coord2(generated_text)
-                    original_sample["pred_coord2"] = [pred_coord2[0]*original_sample["scale"][0],pred_coord2[1]*original_sample["scale"][1]]
-                    x1, y1 = pred_coord
-                    x2, y2 = pred_coord2
-                    delta_x = x2 - x1
-                    delta_y = y2 - y1
-                    if abs(delta_x) > abs(delta_y):
-                        if delta_x > 0:
-                            pred_direction = 'right'
-                        else:
-                            pred_direction = 'left'
-                    else:
-                        if delta_y > 0:
-                            pred_direction = 'down'
-                        else:
-                            pred_direction = 'up'
-                    original_sample["pred_input_text"] = pred_direction
-                else:
-                    original_sample["pred_input_text"] = "no input text"
-                    
-                # print(original_sample["pred_input_text"],original_sample["gt_input_text"])
                 original_sample["scale"]= original_sample["scale"]
                 original_sample["image"]=''
                 results.append(original_sample)
@@ -459,6 +441,10 @@ def main(args):
     #     for worker_results in all_results:
     #         for sample in worker_results:
     #             ans_file.write(json.dumps(sample) + "\n")
+    with open(NEW_FILE, "r") as f:
+        lines = f.readlines()
+    id2pred = {}
+    
 
 
 if __name__ == "__main__":

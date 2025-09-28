@@ -107,7 +107,7 @@ AC_SYS_PROMPT = (
                     "\"text\": {{\"description\": \"Required only by `action=type` and `action=open`.\", \"type\": \"string\"}}, "
                     "\"time\": {{\"description\": \"The seconds to wait. Required only by `action=long_press` and `action=wait`.\", \"type\": \"number\"}}, "
                     "\"button\": {{\"description\": \"Back means returning to the previous interface, Home means returning to the desktop, Menu means opening the application background menu, and Enter means pressing the enter. Required only by `action=system_button`.\", \"enum\": [\"Back\"], \"type\": \"string\"}}}}, "
-                "\"required\": [\"action\"], """
+                "\"required\": [\"action\"], "
                 "\"type\": \"object\"}}, "
             "\"args_format\": \"Format the arguments as a JSON object.\"}}"
     "}}\n</tools>\n\n"
@@ -141,13 +141,53 @@ ODYSSEY_SYS_PROMPT = (
                     "\"coordinate\": {{\"description\": \"(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates to move the mouse to. Required only by `action=click`, `action=long_press`, and `action=swipe`.\", \"type\": \"array\"}}, "
                     "\"coordinate2\": {{\"description\": \"(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates to move the mouse to. Required only by `action=swipe`.\", \"type\": \"array\"}}, "
                     "\"text\": {{\"description\": \"Required only by `action=type`.\", \"type\": \"string\"}}, "
-                    "\"time\": {{\"description\": \"The seconds to wait. Required only by `action=long_press`.\", \"type\": \"number\"}}, "
                     "\"button\": {{\"description\": \"Back means returning to the previous interface, Home means returning to the desktop, Menu means opening the application background menu, and Enter means pressing the enter. Required only by `action=system_button`\", \"enum\": [\"Back\", \"Home\", \"Menu\"], \"type\": \"string\"}}, "
                     "\"status\": {{\"description\": \"The status of the task. Required only by `action=terminate`.\", \"type\": \"string\", \"enum\": [\"success\", \"failure\"]}}}}, "
-                "\"required\": [\"action\"], """
+                "\"required\": [\"action\"], "
                 "\"type\": \"object\"}}, "
             "\"args_format\": \"Format the arguments as a JSON object.\"}}"
     "}}\n</tools>\n\n"
+    "For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{{\"name\": <function-name>, \"arguments\": <args-json-object>}}\n</tool_call>"
+)
+
+WEB_SYS_PROMPT = (
+    "You are a helpful assistant.\n\n"
+    "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n" 
+    "<tools>\n{{" 
+        "\"type\": \"function\", " 
+        "\"function\": {{" 
+            "\"name_for_human\": \"computer_use\", " 
+            "\"name\": \"computer_use\", " 
+            "\"description\": \"Use a mouse and keyboard to interact with a computer, and take screenshots.\\n" 
+            "* This is an interface to a desktop GUI. You do not have access to a terminal or applications menu. You must click on desktop icons to start applications.\\n" 
+            "* Some applications may take time to start or process actions, so you may need to wait and take successive screenshots to see the results of your actions. E.g. if you click on Firefox and a window doesn't open, try wait and taking another screenshot.\\n" 
+            "* The screen's resolution is {display_width_px}x{display_height_px}.\\n" 
+            "* Whenever you intend to move the cursor to click on an element like an icon, you should consult a screenshot to determine the coordinates of the element before moving the cursor.\\n" 
+            "* If you tried clicking on a program or link but it failed to load, even after waiting, try adjusting your cursor position so that the tip of the cursor visually falls on the element that you want to click.\\n" 
+            "* Make sure to click any buttons, links, icons, etc with the cursor tip in the center of the element. Don't click boxes on their edges unless asked.\", " 
+        "\"parameters\": {{" 
+            "\"properties\": {{" 
+                "\"action\": {{" 
+                    "\"description\": \"The action to perform. The available actions are:\\n" 
+                    "* `key`: Performs key down presses on the arguments passed in order, then performs key releases in reverse order.\\n" 
+                    "* `type`: Type a string of text on the keyboard.\\n" 
+                    "* `mouse_move`: Move the cursor to a specified (x, y) pixel coordinate on the screen.\\n" 
+                    "* `left_click`: Click the left mouse button.\\n"
+                    "* `left_click_drag`: Click and drag the cursor to a specified (x, y) pixel coordinate on the screen.\\n" 
+                    "* `right_click`: Click the right mouse button.\\n" 
+                    "* `double_click`: Double-click the left mouse button.\\n" 
+                    "* `scroll`: Performs a scroll of the mouse scroll wheel.\\n" 
+                    "* `terminate`: Terminate the current task and report its completion status.\", " 
+                    "\"enum\": [\"key\", \"type\", \"mouse_move\", \"left_click\", \"left_click_drag\", \"right_click\", \"double_click\", \"scroll\", \"terminate\"], \"type\": \"string\"}}, " 
+                "\"keys\": {{\"description\": \"Required only by `action=key`.\", \"type\": \"array\"}}, " 
+                "\"text\": {{\"description\": \"Required only by `action=type`.\", \"type\": \"string\"}}, " 
+                "\"coordinate\": {{\"description\": \"(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates to move the mouse to. Required only by `action=left_click`, `action=right_click`, `action=double_click`, `action=middle_click`, `action=mouse_move` and `action=left_click_drag`.\", \"type\": \"array\"}}, " 
+                "\"pixels\": {{\"description\": \"The amount of scrolling to perform. Positive values scroll up, negative values scroll down. Required only by `action=scroll`.\", \"type\": \"number\"}}, " 
+                "\"status\": {{\"description\": \"The status of the task. Required only by `action=terminate`.\", \"type\": \"string\", \"enum\": [\"success\", \"failure\"]}}}}, " 
+            "\"required\": [\"action\"], " 
+            "\"type\": \"object\"}}, " 
+        "\"args_format\": \"Format the arguments as a JSON object.\"}}" 
+    "}}\n</tools>\n\n" 
     "For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{{\"name\": <function-name>, \"arguments\": <args-json-object>}}\n</tool_call>"
 )
 
@@ -252,28 +292,12 @@ class RLHFDataset(Dataset):
         row_dict.pop('scale', None)
         images=[row_dict['image']]
         
-      
-        # if task_type=='high':
-        if self.format_prompt == "no_think":
-            prompt_str=  (
-                f"<image>\nThe user query: {text}\n"
-                "Directly output the function call in <tool_call></tool_call> tags as follows:\n"
-                "<tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
+        images=[process_image(image, self.max_pixels, self.min_pixels) for image in images]
+
+        if ui_type == 'gui_odyssey':
+            system_message = ODYSSEY_SYS_PROMPT.format(
+                display_width_px=images[0].width, display_height_px=images[0].height
             )
-        elif self.format_prompt == "think":
-            prompt_str=  (
-                f"<image>\nThe user query: {text}\n"
-                "Output the thinking process in <think></think> tags, and the function call in <tool_call></tool_call> tags as follows:\n"
-                "<think> ... </think> <tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
-            )
-        elif self.format_prompt == "adaptive":
-            # prompt_str=  (
-            #     f"<image>\nThe user query: {text}\n"
-            #     "Output the thinking process in <think></think> tags, and the function call in <tool_call></tool_call> tags as follows:\n"
-            #     "<think> ... </think> <tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
-            #     "or directly output the function call in <tool_call></tool_call> tags as follows:\n"
-            #     "<tool_call>{\"name\": \"gui_action\", \"arguments\": {\"action\": \"click\", \"coordinate\": [x, y]}}</tool_call>\n"
-            # )
             prompt_str = (
                 "You may conduct step-by-step reasoning to help you better solve the problem before the <tool_call></tool_call> XML tags."
                 "The thinking process MUST be surrounded <thinking></thinking> tags as follows:\n"
@@ -281,73 +305,30 @@ class RLHFDataset(Dataset):
                 f"<image>\nThe user query: {text}\n"
                 f"Task progress (You have done the following operation on the current device): {history}\n"
             )
-        else:
-            raise ValueError(f"Unknown format_prompt {self.format_prompt}.")
-        
- # w/ think prompt
-            #  prompt_str=  (
-            #     f"You are GUI-R1, a reasoning GUI Agent Assistant. In this UI screenshot <image>, I want you to continue executing the command '{text}', with the action history being '{history}'.\n"
-            #     "Please provide the action to perform (enumerate from ['complete', 'close/delete', 'press_home', 'click', 'press_back', 'type', 'select', 'scroll', 'enter']), the point where the cursor is moved to (integer) if a click is performed, and any input text required to complete the action.\n"
-            #     "Output the final answer in <answer> </answer> tags as follows:\n"
-            #     "<answer>[{'action': enum['complete', 'close/delete', 'press_home', 'click', 'press_back', 'type', 'select', 'scroll', 'enter'], 'point': [x, y], 'input_text': 'no input text [default]'}]</answer>\n"
-            #     "Note:\n specific input text (no default) is necessary for actions enum['type', 'select', 'scroll'] \n Example:\n"
-            #     "[{'action': enum['complete', 'close/delete', 'press_home', 'press_back', 'enter'], 'point': [-100, -100], 'input_text': 'no input text'}]\n"
-            #     "[{'action': enum['click'], 'point': [123, 300], 'input_text': 'no input text'}]\n"
-            #     "[{'action': enum['type', 'select'], 'point': [-100, -100], 'input_text': 'shanghai shopping mall'}]\n"
-            #     "[{'action': enum['scroll'], 'point': [-100, -100], 'input_text': enum['up', 'left', 'right', 'down']}]"
-            # ) # w/o think prompt
-            # else:
-            #     prompt_str=(
-            #         f"In this UI screenshot <image>, I want you to continue executing the command '{text}', with the action history being '{history}'.\n"
-            #         "Please provide the action to perform (enumerate from ['click']), the point where the cursor is moved to (integer) if a click is performed, and any input text required to complete the action.\n"
-            #         "Output the thinking process in <think> </think> tags, and the final answer in <answer> </answer> tags as follows:\n"
-            #         "<think> ... </think> <answer>[{'action': enum[ 'click'], 'point': [x, y], 'input_text': 'no input text'}]</answer>\n" \
-            #         "Note:\n thinking process can be omitted with ...\n"
-            #         "Example:\n"
-            #         "[{'action': enum['click'], 'point': [123, 300], 'input_text': 'no input text'}]\n"
-            #     ) # w/ think prompt
-            # prompt_str=(
-            #     f"You are GUI-R1, a reasoning GUI Agent Assistant. In this UI screenshot <image>, I want you to continue executing the command '{text}', with the action history being '{history}'.\n"
-            #     "Please provide the action to perform (enumerate from ['click']), the point where the cursor is moved to (integer) if a click is performed, and any input text required to complete the action.\n"
-            #     "Output the final answer in <answer> </answer> tags as follows:\n"
-            #     "<answer>[{'action': enum[ 'click'], 'point': [x, y], 'input_text': 'no input text'}]</answer>\n"
-            #     "Example:\n"
-            #     "[{'action': enum['click'], 'point': [123, 300], 'input_text': 'no input text'}]\n"
-            # ) # w/o think prompt
-        
-        images=[process_image(image, self.max_pixels, self.min_pixels) for image in images]
-
-        # screenspot = MobileUse(
-        #     cfg={"display_width_px": images[0].width, "display_height_px": images[0].height},
-        # )
-        # nousFnCallPrompt = NousFnCallPrompt()
-        # system_message = nousFnCallPrompt.preprocess_fncall_messages(
-        #     messages = [
-        #         Message(role="system", content=[ContentItem(text="You are a helpful assistant.")]),
-        #         # Message(role="user", content=[
-        #         #     ContentItem(text=user_query),
-        #         #     ContentItem(image=data_uri)
-        #         # ]),
-        #     ],
-        #     functions=[screenspot.function],
-        #     lang=None,
-        # )
-        # system_message = system_message[0].model_dump()
-        # syttem_message = [text['text'] for text in system_message['content']]
-        # system_message = ' '.join(syttem_message)
-        if ui_type == 'gui_odyssey':
-            system_message = ODYSSEY_SYS_PROMPT.format(
-                display_width_px=images[0].width, display_height_px=images[0].height
-            )
         elif ui_type == 'android_control':
             system_message = AC_SYS_PROMPT.format(
                 display_width_px=images[0].width, display_height_px=images[0].height
             )
-        else:
-            print(f"[Warning] Unknown ui_type: {ui_type}, use the original system prompt as default.")
-            system_message = ORIGINAL_SYS_PROMPT.format(
+            prompt_str = (
+                "You may conduct step-by-step reasoning to help you better solve the problem before the <tool_call></tool_call> XML tags."
+                "The thinking process MUST be surrounded <thinking></thinking> tags as follows:\n"
+                "<thinking> ... </thinking> <tool_call>{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"...\", ...}}</tool_call>\n"
+                f"<image>\nThe user query: {text}\n"
+                f"Task progress (You have done the following operation on the current device): {history}\n"
+            )
+        elif ui_type == 'agentnetbench':
+            system_message = WEB_SYS_PROMPT.format(
                 display_width_px=images[0].width, display_height_px=images[0].height
             )
+            prompt_str = (
+                "You may conduct step-by-step reasoning to help you better solve the problem before the <tool_call></tool_call> XML tags."
+                "The thinking process MUST be surrounded <thinking></thinking> tags as follows:\n"
+                "<thinking> ... </thinking> <tool_call>{\"name\": \"computer_use\", \"arguments\": {\"action\": \"...\", ...}}</tool_call>\n"
+                f"<image>\nThe user query: {text}\n"
+                f"Task progress (You have done the following operation on the current device): {history}\n"
+            )
+        else:
+            print(f"[Warning] Unknown ui_type: {ui_type}, use the original system prompt as default.")
         
         messages = [
             {

@@ -86,6 +86,7 @@ class ActorConfig:
     sigmoid_x0: float = 0.5
     clip_ratio_dual: float = 3.0
     think_alpha: float = 0.0
+    old_rollout_probs: bool = False
     ppo_epochs: int = 1
     padding_free: bool = False
     ulysses_sequence_parallel_size: int = 1

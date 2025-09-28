@@ -46,6 +46,16 @@ def extract_status(content):
         return action_match.group(1)
     return "no input text"
 
+def extract_keys(content):
+    # answer_tag_pattern = r'<tool_call>(.*?)</tool_call>'
+    action_pattern = r"\"keys\":\s*(.*?)\s*\}"
+    # content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
+    # if content_answer_match:
+    #     content_answer = content_answer_match.group(1).strip()
+    action_match = re.search(action_pattern, content)
+    if action_match:
+        return action_match.group(1)
+    return "no input text"
 
 def extract_coord(content):
     # Try to find the bbox within <answer> tags, if can not find, return [0, 0, 0, 0]
@@ -149,12 +159,18 @@ def r1gui_format_reward(predict_str: str, ground_truth: str) -> float:
             if pred_action not in ['click', 'long_press', 'swipe', 'type', 'system_button', 'open', 'wait']:
                 print(f"Invalid action: {pred_action} for ui_type: {ui_type}")
                 return 0.0
+        
         if ui_type == "gui_odyssey":
             if pred_action not in ['click', 'long_press', 'swipe', 'type', 'system_button', 'terminate']:
                 print(f"Invalid action: {pred_action} for ui_type: {ui_type}")
                 return 0.0
 
-        if pred_action in ['click', 'long_press']:
+        if ui_type == "agentnetbench":
+            if pred_action not in ['key', 'type', 'mouse_move', 'left_click', 'right_click', 'double_click', 'scroll', 'terminate', 'left_click_drag']:
+                print(f"Invalid action: {pred_action} for ui_type: {ui_type}")
+                return 0.0
+
+        if pred_action in ['click', 'long_press', 'mouse_move', 'left_click', 'right_click', 'double_click', 'left_click_drag']:
             coord, valid = extract_coord(predict_str)
             if not valid:
                 return 0.0
@@ -166,6 +182,10 @@ def r1gui_format_reward(predict_str: str, ground_truth: str) -> float:
             button = extract_button(answer_content)
             if button == "no input text":
                 return 0.0
+        elif pred_action in ['key']:
+            keys = extract_keys(answer_content)
+            if len(keys) == 0:
+                return 0.0
         elif pred_action in ['terminate']:
             status = extract_status(answer_content)
             if status == "no input text":
@@ -175,7 +195,7 @@ def r1gui_format_reward(predict_str: str, ground_truth: str) -> float:
             pred_coord2, valid2 = extract_coord2(answer_content)
             if not (valid1 and valid2):
                 return 0.0
-        elif pred_action in ['wait']:
+        elif pred_action in ['wait', 'scroll']:
             return 1.0
         
         else:
@@ -210,8 +230,11 @@ def r1gui_accuracy_reward(predict_str: str, ground_truth: str) -> float:
         if ui_type == "gui_odyssey":
             if pred_action not in ['click', 'long_press', 'swipe', 'type', 'system_button', 'terminate']:
                 return 0.0
+        if ui_type == "agentnetbench":
+            if pred_action not in ['key', 'type', 'mouse_move', 'left_click', 'right_click', 'double_click', 'scroll', 'terminate', 'left_click_drag']:
+                return 0.0
 
-        if gt_action in ["click", "long_press"]:
+        if gt_action in ["click", "long_press", "mouse_move", "left_click", "right_click", "double_click", "left_click_drag"]:
             pred_bbox , _ =extract_coord(predict_str)
             if len(gt_bbox)==2:
                 if ((pred_bbox[0]-gt_bbox[0])/ground_truth['image_size'][0])**2+((pred_bbox[1]-gt_bbox[1])/ground_truth['image_size'][1])**2 < 0.14**2:
@@ -232,6 +255,14 @@ def r1gui_accuracy_reward(predict_str: str, ground_truth: str) -> float:
         elif pred_action in ['system_button']:
             pred_button = extract_button(predict_str)
             if calculate_f1_score(pred_button, gt_input_text)>=0.5:
+                return 1.0
+            else:
+                return 0.0
+        elif pred_action in ['key']:
+            pred_keys = extract_keys(predict_str)
+            if 'keys=' in gt_input_text:
+                gt_input_text = gt_input_text.replace('keys=','').strip()
+            if calculate_f1_score(pred_keys, gt_input_text)>=0.5:
                 return 1.0
             else:
                 return 0.0
@@ -265,8 +296,7 @@ def r1gui_accuracy_reward(predict_str: str, ground_truth: str) -> float:
                 return 1.0
             else:
                 return 0.0
-        
-        elif pred_action in ['wait']:
+        elif pred_action in ['wait', 'scroll']:
             return 1.0
         else:
             print(f"Unknown action: {pred_action}")
