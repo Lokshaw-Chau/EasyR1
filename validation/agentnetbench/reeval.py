@@ -125,7 +125,7 @@ def reeval_directory(input_dir: Path, output_dir: Path = None):
                             def __init__(self, model, client=None, **kwargs):
                                 self.model = model
                                 self.client = None
-                                self.image_dir = "test_data/images"
+                                self.image_dir = "/root/workspace/EasyR1/data/gui-r1/AgentNetBench/test_data/images"
                                 self.image_cache = {}
                                 self.message_cache = {}
                                 self.history_n = 3
@@ -146,7 +146,7 @@ def reeval_directory(input_dir: Path, output_dir: Path = None):
                             def __init__(self, model, client=None, **kwargs):
                                 self.model = model
                                 self.client = None
-                                self.image_dir = "test_data/images"
+                                self.image_dir = "/root/workspace/EasyR1/data/gui-r1/AgentNetBench/test_data/images"
                             def load_image(self, image_file, image_dir):
                                 import os
                                 image_path = os.path.join(image_dir, image_file)
@@ -211,8 +211,8 @@ def reeval_directory(input_dir: Path, output_dir: Path = None):
             
             # Prepare evaluation item
             eval_item = {
-                # "ground_truth_actions": step_result["ground_truth_actions"],
-                "ground_truth_actions": step_result["used_actions"],
+                "ground_truth_actions": step_result["ground_truth_actions"],
+                # "ground_truth_actions": step_result["used_actions"],
                 "predicted_actions": step_result["predicted_actions"]
             }
             
@@ -243,10 +243,35 @@ def reeval_directory(input_dir: Path, output_dir: Path = None):
 
 def main():
     parser = argparse.ArgumentParser(description="Re-evaluate agent outputs from a directory")
-    parser.add_argument("--input_dir", type=str, help="Directory containing trajectory evaluation results")
+    # parser.add_argument("--input_dir", type=str, help="Directory containing trajectory evaluation results")
+    parser.add_argument("--data_dir", type=str, help="Test trajectory data directory")
+    parser.add_argument("--response_file", type=str, help="Input trajectory evaluation results file")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory for re-evaluated results")
     
     args = parser.parse_args()
+
+    with open(args.response_file, "r") as f:
+        responses = [json.loads(line) for line in f]
+    
+    id2response = {item["uid"]: item['pred'] for item in responses}
+
+    for file in os.listdir(args.data_dir):
+        if file.endswith(".json"):
+            file_path = os.path.join(args.data_dir, file)
+            with open(file_path, "r") as f:
+                trajectory = json.load(f)
+            task_id = trajectory["task_id"]
+            test_list = []
+            for step_n in range(len(trajectory['steps'])):
+                step_dict = {
+                    'task_id': task_id,
+                    'step_num': step_n,
+                    'ground_truth_actions': trajectory['steps'][step_n]['ground_truth_actions'],
+                    'milestone': trajectory['steps'][step_n].get('milestone', False),
+                    'raw_response': id2response[task_id],
+                }
+
+
     
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir) if args.output_dir else None
