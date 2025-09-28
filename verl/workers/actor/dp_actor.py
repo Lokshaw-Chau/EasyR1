@@ -285,9 +285,11 @@ class DataParallelPPOActor(BasePPOActor):
                     attention_mask = model_inputs["attention_mask"]
                     response_mask = attention_mask[:, -response_length:]
                     old_log_probs = model_inputs["old_log_probs"]
-                    # rollout_prob = model_inputs['rollout_prob']
-                    # modify old_log_probs[:, 0] to log(0.5)
-                    # old_log_probs[:, 0] = torch.log(rollout_prob)
+
+                    if self.config.old_rollout_probs:
+                        rollout_prob = model_inputs['rollout_prob']
+                        old_log_probs[:, 0] = torch.log(rollout_prob)
+                    
                     advantages = model_inputs["advantages"]
                     enforce_nothinking = model_inputs['enforce_nothinking']
 
@@ -304,7 +306,7 @@ class DataParallelPPOActor(BasePPOActor):
                     first_t_logprobs = log_probs[~enforce_nothinking, 0]
                     first_t_probs = first_t_logprobs.exp()
 
-                    scaling_factor = self.config.clip_mode_scale_factor * (1 - 1 / (1 + np.exp(-self.config.sigmoid_k * (training_process - self.config.sigmoid_x0))))
+                    # scaling_factor = self.config.clip_mode_scale_factor * (1 - 1 / (1 + np.exp(-self.config.sigmoid_k * (training_process - self.config.sigmoid_x0))))
 
                     pg_loss, pg_clipfrac_higher, pg_clipfrac_lower, ppo_kl, cond_loss, resp_loss = core_algos.compute_policy_loss(
                         old_log_probs=old_log_probs,
@@ -313,8 +315,8 @@ class DataParallelPPOActor(BasePPOActor):
                         response_mask=response_mask,
                         clip_ratio_low=self.config.clip_ratio_low,
                         clip_ratio_high=self.config.clip_ratio_high,
-                        clip_ratio_mode_high=self.config.clip_ratio_high+scaling_factor,
-                        clip_ratio_mode_low=self.config.clip_ratio_low+scaling_factor,
+                        clip_ratio_mode_high=self.config.clip_ratio_high, #+scaling_factor,
+                        clip_ratio_mode_low=self.config.clip_ratio_low,# +scaling_factor,
                         clip_ratio_dual=self.config.clip_ratio_dual,
                         thinkless_alpha= self.config.think_alpha,
                     )
@@ -360,7 +362,7 @@ class DataParallelPPOActor(BasePPOActor):
                         # "actor/entropy_bonus": entropy_bonus.detach().item(),
                         "actor/ppo_kl": ppo_kl.detach().item(),
                         "actor/cond_loss": cond_loss.mean().detach().item(),
-                        "actor/clip_ratio_mode_high": self.config.clip_ratio_high+scaling_factor,
+                        "actor/clip_ratio_mode_high": self.config.clip_ratio_high,# +scaling_factor,
                     }
                     # Add conditional checks for non-empty tensors
                     if len(first_eot_probs) > 0:

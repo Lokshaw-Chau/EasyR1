@@ -63,7 +63,7 @@ worker:
     enable_chunked_prefill: false
     tensor_parallel_size: 2
     limit_images: 0
-    rollout_intervention: false
+    rollout_intervention: force
     intervention_no_think_n: 0
     intervention_think_n: 0
     val_override_config:

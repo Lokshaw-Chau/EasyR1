@@ -75,6 +75,7 @@ class AlgorithmConfig:
     kl_horizon: float = 0.0
     kl_target: float = 0.0
     think_alpha: float = 0.0
+    old_rollout_probs: bool = False
 
 
 @dataclass
@@ -124,6 +125,7 @@ class PPOConfig:
         self.worker.actor.think_alpha = self.algorithm.think_alpha
         self.worker.actor.sigmoid_k = self.algorithm.sigmoid_k
         self.worker.actor.sigmoid_x0 = self.algorithm.sigmoid_x0
+        self.worker.actor.old_rollout_probs = self.algorithm.old_rollout_probs
 
     def deep_post_init(self):
         recursive_post_init(self)

@@ -38,7 +38,7 @@ class RolloutConfig:
     max_num_batched_tokens: int = 8192
     disable_log_stats: bool = True
     val_override_config: Dict[str, Any] = field(default_factory=dict)
-    rollout_intervention: bool = False
+    rollout_intervention: str = 'force' # 'force', 'none', 'schedule'
     intervention_no_think_n: int = 0
     intervention_think_n: int = 0
     """auto keys"""
