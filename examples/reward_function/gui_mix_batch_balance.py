@@ -294,6 +294,7 @@ def _compute_score(predict_str: str, ground_truth: str, think_ratio: float = 1.0
         "training_progress": training_progress if training_progress is not None else 0.0,
         "think_acc": accuracy*scale_factor if "<thinking>" in predict_str else 0.0,
         "no_think_acc": accuracy*scale_factor if "<thinking>" not in predict_str else 0.0,
+        "penalty": 0.0,
     }
 
 def think_ratio(predict_strs: list[str]):
@@ -308,18 +309,32 @@ def think_ratio(predict_strs: list[str]):
     
     return think_count / total_count
 
-def _batch_wise_penalty_reward(scores, ground_truths, gamma):
-    think_ratio = sum(score["think_ratio"] for score in scores) / len(scores)
-    if think_ratio < gamma:
-        for score in scores:
-            if score["think_ratio"] < 0.5:
-                score["overall"] -= 2
-    elif think_ratio > 1 - gamma:
-        for score in scores:
-            if score["think_ratio"] >= 0.5:
-                score["overall"] -= 2
-    else:
-        print("No batch-wise penalty applied, think_ratio:", think_ratio)
+def _group_wise_collapse_penalty(scores, ground_truths, theta):
+    # group-wise collapse penalty
+    # think_ratio = sum(score["think_ratio"] for score in scores) / len(scores)
+    gt2tr_list = {}
+    for i, score in enumerate(scores):
+        ground_truth = ground_truths[i]
+        if ground_truth not in gt2tr_list:
+            gt2tr_list[ground_truth] = []
+        gt2tr_list[ground_truth].append(score["think_ratio"])
+
+    gt2tr = {k: sum(v) / len(v) for k, v in gt2tr_list.items()}
+    print("gt2tr:", gt2tr)
+
+    for i, score in enumerate(scores):
+        tr = gt2tr[ground_truths[i]] 
+
+        if tr < theta:
+            if score["think_ratio"]<0.5: # no think
+                score["overall"] = score["overall"] - 2
+                score["penalty"] = 1.0 / ((1-tr) * 16)
+                
+        if tr > 1-theta:
+            if score["think_ratio"]>=0.5: # think
+                score["overall"] = score["overall"] - 2
+                score["penalty"] = 1.0 / (tr * 16)
+        
     return scores
 
 def _group_wise_bias(scores, ground_truths):
@@ -344,8 +359,8 @@ def compute_score(predict_strs: list[str], ground_truths: list[str], training_pr
     current_think_ratio = think_ratio(predict_strs)
     for predict_str, ground_truth in zip(predict_strs, ground_truths):
         scores.append(_compute_score(predict_str, ground_truth, current_think_ratio, None))
-    
-    scores = _batch_wise_penalty_reward(scores, ground_truths, gamma=0.1)
+
+    scores = _group_wise_collapse_penalty(scores, ground_truths, theta=0.15)
 
     scores = _group_wise_bias(scores, ground_truths)
 

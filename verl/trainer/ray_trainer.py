@@ -507,7 +507,7 @@ class RayPPOTrainer:
                     with timer("gen", timing_raw):  # wg: worker group
                         # dynamic n
                         if self.config.algorithm.ri_schedule == "linear":
-                            intervention_n = int((1 - self.global_step/self.training_steps) * 8) + 1
+                            intervention_n = int((1 - self.global_step/self.training_steps) * 9)
                             intervention_think_n = intervention_n
                             intervention_nothink_n = intervention_n
                         elif self.config.algorithm.ri_schedule == "manual":
