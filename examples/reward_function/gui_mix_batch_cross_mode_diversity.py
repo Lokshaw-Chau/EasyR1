@@ -46,6 +46,16 @@ def extract_status(content):
         return action_match.group(1)
     return "no input text"
 
+def extract_keys(content):
+    # answer_tag_pattern = r'<tool_call>(.*?)</tool_call>'
+    action_pattern = r"\"keys\":\s*(.*?)\s*\}"
+    # content_answer_match = re.search(answer_tag_pattern, content, re.DOTALL)
+    # if content_answer_match:
+    #     content_answer = content_answer_match.group(1).strip()
+    action_match = re.search(action_pattern, content)
+    if action_match:
+        return action_match.group(1)
+    return "no input text"
 
 def extract_coord(content):
     # Try to find the bbox within <answer> tags, if can not find, return [0, 0, 0, 0]
@@ -149,12 +159,18 @@ def r1gui_format_reward(predict_str: str, ground_truth: str) -> float:
             if pred_action not in ['click', 'long_press', 'swipe', 'type', 'system_button', 'open', 'wait']:
                 print(f"Invalid action: {pred_action} for ui_type: {ui_type}")
                 return 0.0
+        
         if ui_type == "gui_odyssey":
             if pred_action not in ['click', 'long_press', 'swipe', 'type', 'system_button', 'terminate']:
                 print(f"Invalid action: {pred_action} for ui_type: {ui_type}")
                 return 0.0
 
-        if pred_action in ['click', 'long_press']:
+        if ui_type == "agentnetbench":
+            if pred_action not in ['key', 'type', 'mouse_move', 'left_click', 'right_click', 'double_click', 'scroll', 'terminate', 'left_click_drag']:
+                print(f"Invalid action: {pred_action} for ui_type: {ui_type}")
+                return 0.0
+
+        if pred_action in ['click', 'long_press', 'mouse_move', 'left_click', 'right_click', 'double_click', 'left_click_drag']:
             coord, valid = extract_coord(predict_str)
             if not valid:
                 return 0.0
@@ -166,6 +182,10 @@ def r1gui_format_reward(predict_str: str, ground_truth: str) -> float:
             button = extract_button(answer_content)
             if button == "no input text":
                 return 0.0
+        elif pred_action in ['key']:
+            keys = extract_keys(answer_content)
+            if keys == "no input text":
+                return 0.0
         elif pred_action in ['terminate']:
             status = extract_status(answer_content)
             if status == "no input text":
@@ -175,7 +195,7 @@ def r1gui_format_reward(predict_str: str, ground_truth: str) -> float:
             pred_coord2, valid2 = extract_coord2(answer_content)
             if not (valid1 and valid2):
                 return 0.0
-        elif pred_action in ['wait']:
+        elif pred_action in ['wait', 'scroll']:
             return 1.0
         
         else:
@@ -210,8 +230,11 @@ def r1gui_accuracy_reward(predict_str: str, ground_truth: str) -> float:
         if ui_type == "gui_odyssey":
             if pred_action not in ['click', 'long_press', 'swipe', 'type', 'system_button', 'terminate']:
                 return 0.0
+        if ui_type == "agentnetbench":
+            if pred_action not in ['key', 'type', 'mouse_move', 'left_click', 'right_click', 'double_click', 'scroll', 'terminate', 'left_click_drag']:
+                return 0.0
 
-        if gt_action in ["click", "long_press"]:
+        if gt_action in ["click", "long_press", "mouse_move", "left_click", "right_click", "double_click", "left_click_drag"]:
             pred_bbox , _ =extract_coord(predict_str)
             if len(gt_bbox)==2:
                 if ((pred_bbox[0]-gt_bbox[0])/ground_truth['image_size'][0])**2+((pred_bbox[1]-gt_bbox[1])/ground_truth['image_size'][1])**2 < 0.14**2:
@@ -232,6 +255,14 @@ def r1gui_accuracy_reward(predict_str: str, ground_truth: str) -> float:
         elif pred_action in ['system_button']:
             pred_button = extract_button(predict_str)
             if calculate_f1_score(pred_button, gt_input_text)>=0.5:
+                return 1.0
+            else:
+                return 0.0
+        elif pred_action in ['key']:
+            pred_keys = extract_keys(predict_str)
+            if 'keys=' in gt_input_text:
+                gt_input_text = gt_input_text.replace('keys=','').strip()
+            if calculate_f1_score(pred_keys, gt_input_text)>=0.5:
                 return 1.0
             else:
                 return 0.0
@@ -265,8 +296,7 @@ def r1gui_accuracy_reward(predict_str: str, ground_truth: str) -> float:
                 return 1.0
             else:
                 return 0.0
-        
-        elif pred_action in ['wait']:
+        elif pred_action in ['wait', 'scroll']:
             return 1.0
         else:
             print(f"Unknown action: {pred_action}")
@@ -281,7 +311,7 @@ def _compute_score(predict_str: str, ground_truth: str, think_ratio: float = 1.0
     
     # Calculate base score
     base_score = accuracy + format
-    mode_ratio = think_ratio if "<thinking>" in predict_str else 1 - think_ratio
+    mode_ratio = think_ratio if not predict_str.startswith("<tool_call>") else 1 - think_ratio
     scale_factor = 1 / mode_ratio
     # Apply progressive scaling based on training progress
     overall_score = base_score
@@ -290,18 +320,18 @@ def _compute_score(predict_str: str, ground_truth: str, think_ratio: float = 1.0
         "overall": overall_score,
         "format": format,
         "accuracy": accuracy,
-        "think_ratio": 1.0 if "<thinking>" in predict_str else 0.0,
+        # "think_ratio": 1.0 if "<thinking>" in predict_str else 0.0,
+        "think_ratio": 1.0 if not predict_str.startswith("<tool_call>") else 0.0,
         "training_progress": training_progress if training_progress is not None else 0.0,
-        "think_acc": accuracy*scale_factor if "<thinking>" in predict_str else 0.0,
-        "no_think_acc": accuracy*scale_factor if "<thinking>" not in predict_str else 0.0,
-        "penalty": 0.0,
+        "think_acc": accuracy*scale_factor if not predict_str.startswith("<tool_call>") else 0.0,
+        "no_think_acc": accuracy*scale_factor if predict_str.startswith("<tool_call>") else 0.0,
     }
 
 def think_ratio(predict_strs: list[str]):
     """
     计算 predict_strs 中 <thinking> ... </thinking> 的比例。
     """
-    think_count = sum(1 for s in predict_strs if "<thinking>" in s)
+    think_count = sum(1 for s in predict_strs if not s.startswith("<tool_call>"))
     total_count = len(predict_strs)
     
     if total_count == 0:
@@ -309,31 +339,30 @@ def think_ratio(predict_strs: list[str]):
     
     return think_count / total_count
 
-def _group_wise_collapse_penalty(scores, ground_truths, theta):
-    # group-wise collapse penalty
-    # think_ratio = sum(score["think_ratio"] for score in scores) / len(scores)
-    gt2tr_list = {}
+def _group_wise_format_compensation(scores, ground_truths):
+    # group-wise format_compensation
+    gt2format_list = {}
     for i, score in enumerate(scores):
         ground_truth = ground_truths[i]
-        if ground_truth not in gt2tr_list:
-            gt2tr_list[ground_truth] = []
-        gt2tr_list[ground_truth].append(score["think_ratio"])
+        if ground_truth not in gt2format_list:
+            gt2format_list[ground_truth] = []
+        gt2format_list[ground_truth].append([score["format"], score["think_ratio"]])
 
-    gt2tr = {k: sum(v) / len(v) for k, v in gt2tr_list.items()}
-    print("gt2tr:", gt2tr)
+    gt2format_diff = {}
+    for k, v in gt2format_list.items():
+        think_format = [x[0] for x in v if x[1] >= 0.5]
+        no_think_format = [x[0] for x in v if x[1] < 0.5]
+        if len(think_format) == 0:
+            think_format = [0]
+        if len(no_think_format) == 0:
+            no_think_format = [0]
+        gt2format_diff[k] = sum(think_format) / len(think_format) - sum(no_think_format) / len(no_think_format)
 
+    print("gt2format_diff:", gt2format_diff)
     for i, score in enumerate(scores):
-        tr = gt2tr[ground_truths[i]] 
-
-        if tr < theta:
-            if score["think_ratio"]<0.5: # no think
-                score["overall"] = score["overall"] - 2
-                score["penalty"] = 1.0 / ((1-tr) * 16)
-                
-        if tr > 1-theta:
-            if score["think_ratio"]>=0.5: # think
-                score["overall"] = score["overall"] - 2
-                score["penalty"] = 1.0 / (tr * 16)
+        diff = gt2format_diff[ground_truths[i]]
+        if score["think_ratio"] > 0.5:  # think
+            score["overall"] = score["overall"] - diff
         
     return scores
 
@@ -354,20 +383,66 @@ def _group_wise_bias(scores, ground_truths):
         
     return scores
 
+def _cross_group_action_diversity(predict_strs, ground_truths, scores):
+    gt2action = {}
+    for i, pred_str in enumerate(predict_strs):
+        ground_truth = ground_truths[i]
+        action = extract_action(pred_str)
+        think_flag = 1.0 if "<thinking>" in pred_str else 0.0
+        if ground_truth not in gt2action:
+            gt2action[ground_truth] = {"think": [], "no_think": []}
+        if action is not None:
+            if think_flag:
+                gt2action[ground_truth]["think"].append(action)
+            else:
+                gt2action[ground_truth]["no_think"].append(action)
+
+    gt2diversity = {}
+    for k, v in gt2action.items():
+        think_actions = v["think"]
+        no_think_actions = v["no_think"]
+        # cross_mode diversity
+        # D_{\text{cross}} = \frac{1}{n_{\text{Think}} \cdot n_{\text{NoThink}}} \sum_{i \in \text{Think}} \sum_{j \in \text{NoThink}} \mathbb{1}(\text{action_type}_i \neq \text{action_type}_j)
+        cross_diversity = 0.0
+        if len(think_actions) > 0 and len(no_think_actions) > 0:
+            for a1 in think_actions:
+                for a2 in no_think_actions:
+                    if a1 != a2:
+                        cross_diversity += 1.0
+            cross_diversity /= (len(think_actions) * len(no_think_actions))
+        else:
+            cross_diversity = 0.0
+        
+        gt2diversity[k] = cross_diversity
+
+    for i, score in enumerate(scores):
+        diversity = gt2diversity[ground_truths[i]]
+        score["cross_mode_diversity"] = diversity
+
+    return scores
+
+
+
 def compute_score(predict_strs: list[str], ground_truths: list[str], training_progress: float = None):
     scores = []
     current_think_ratio = think_ratio(predict_strs)
     for predict_str, ground_truth in zip(predict_strs, ground_truths):
         scores.append(_compute_score(predict_str, ground_truth, current_think_ratio, None))
-
-    scores = _group_wise_collapse_penalty(scores, ground_truths, theta=0.15)
-
+    
     scores = _group_wise_bias(scores, ground_truths)
+
+    scores = _cross_group_action_diversity(predict_strs, ground_truths, scores)
 
     return scores
 
 if __name__ == "__main__":
-    pr=["<thinking> I need to go back to see the brand option. </thinking>  \n<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"system_button\", \"button\": \"Back\"}}</tool_call>"]
-    gt=[json.dumps({"action": "system_button", "gt_bbox": [-1.0, -1.0], "input_text": "Back", "image_size": [1080, 1920]})]
+    pr=["<thinking> I need to go back to see the brand option. </thinking>  \n<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"system_button\", \"button\": \"Back\"}}</tool_call>",
+        "<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"click\", \"button\": \"Back\"}}</tool_call>",
+        "<thinking> I need to go back to see the brand option. </thinking>  \n<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"system_button\", \"button\": \"Back\"}}</tool_call>",
+        "<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"click\", \"button\": \"Back\"}}</tool_call>"]
+    gt=[json.dumps({"action": "system_button", "gt_bbox": [-1.0, -1.0], "input_text": "Back", "image_size": [1080, 1920], "ui_type": "android_control"}),
+        json.dumps({"action": "system_button", "gt_bbox": [-1.0, -1.0], "input_text": "Back", "image_size": [1080, 1920], "ui_type": "android_control"}),
+        json.dumps({"action": "system_button", "gt_bbox": [-1.0, -1.0], "input_text": "Back", "image_size": [1080, 1920], "ui_type": "android_control"}),
+        json.dumps({"action": "system_button", "gt_bbox": [-1.0, -1.0], "input_text": "Back", "image_size": [1080, 1920], "ui_type": "android_control"})]
     # print(r1gui_accuracy_reward(pr,gt))
     print(compute_score(pr, gt))

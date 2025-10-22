@@ -311,7 +311,7 @@ def _compute_score(predict_str: str, ground_truth: str, think_ratio: float = 1.0
     
     # Calculate base score
     base_score = accuracy + format
-    mode_ratio = think_ratio if "<thinking>" in predict_str else 1 - think_ratio
+    mode_ratio = think_ratio if not predict_str.startswith("<tool_call>") else 1 - think_ratio
     scale_factor = 1 / mode_ratio
     # Apply progressive scaling based on training progress
     overall_score = base_score
@@ -320,17 +320,18 @@ def _compute_score(predict_str: str, ground_truth: str, think_ratio: float = 1.0
         "overall": overall_score,
         "format": format,
         "accuracy": accuracy,
-        "think_ratio": 1.0 if "<thinking>" in predict_str else 0.0,
+        # "think_ratio": 1.0 if "<thinking>" in predict_str else 0.0,
+        "think_ratio": 1.0 if not predict_str.startswith("<tool_call>") else 0.0,
         "training_progress": training_progress if training_progress is not None else 0.0,
-        "think_acc": accuracy*scale_factor if "<thinking>" in predict_str else 0.0,
-        "no_think_acc": accuracy*scale_factor if "<thinking>" not in predict_str else 0.0,
+        "think_acc": accuracy*scale_factor if not predict_str.startswith("<tool_call>") else 0.0,
+        "no_think_acc": accuracy*scale_factor if predict_str.startswith("<tool_call>") else 0.0,
     }
 
 def think_ratio(predict_strs: list[str]):
     """
     计算 predict_strs 中 <thinking> ... </thinking> 的比例。
     """
-    think_count = sum(1 for s in predict_strs if "<thinking>" in s)
+    think_count = sum(1 for s in predict_strs if not s.startswith("<tool_call>"))
     total_count = len(predict_strs)
     
     if total_count == 0:
@@ -382,6 +383,61 @@ def _group_wise_bias(scores, ground_truths):
         
     return scores
 
+def _cross_group_action_diversity(predict_strs, ground_truths, scores):
+    gt2action = {}
+    for i, pred_str in enumerate(predict_strs):
+        ground_truth = ground_truths[i]
+        action = extract_action(pred_str)
+        think_flag = 1.0 if "<thinking>" in pred_str else 0.0
+        if ground_truth not in gt2action:
+            gt2action[ground_truth] = {"think": [], "no_think": []}
+        if action is not None:
+            if think_flag:
+                gt2action[ground_truth]["think"].append(action)
+            else:
+                gt2action[ground_truth]["no_think"].append(action)
+
+    gt2diversity = {}
+    for k, v in gt2action.items():
+        think_actions = v["think"]
+        no_think_actions = v["no_think"]
+        # cross_mode diversity
+        # D_{\text{cross}} = \frac{1}{n_{\text{Think}} \cdot n_{\text{NoThink}}} \sum_{i \in \text{Think}} \sum_{j \in \text{NoThink}} \mathbb{1}(\text{action_type}_i \neq \text{action_type}_j)
+        cross_diversity = 0.0
+        if len(think_actions) > 0 and len(no_think_actions) > 0:
+            for a1 in think_actions:
+                for a2 in no_think_actions:
+                    if a1 != a2:
+                        cross_diversity += 1.0
+            cross_diversity /= (len(think_actions) * len(no_think_actions))
+        else:
+            cross_diversity = 0.0
+        
+        gt2diversity[k] = cross_diversity
+
+    for i, score in enumerate(scores):
+        diversity = gt2diversity[ground_truths[i]]
+        score["cross_mode_diversity"] = diversity
+
+    return scores
+
+def _prior_bonus(scores, ground_truths):
+    # give extra bonus if the gt action is click and the model choose thinking mode
+    for i, score in enumerate(scores):
+        if score['format'] < 0.5 or score ['overall'] > 1.5:
+            continue
+        ground_truth = json.loads(ground_truths[i])
+        gt_action = ground_truth['action'].lower()
+        if gt_action in ["click", "long_press", "mouse_move", "left_click", "right_click", "double_click", "left_click_drag"] and score["think_ratio"] > 0.5:
+            score["overall"] += 0.5
+        elif gt_action not in ["click", "long_press", "mouse_move", "left_click", "right_click", "double_click", "left_click_drag"] and score["think_ratio"] <= 0.5:
+            score["overall"] += 0.5
+        else:
+            score["overall"] += 0.0
+
+    return scores
+
+
 def compute_score(predict_strs: list[str], ground_truths: list[str], training_progress: float = None):
     scores = []
     current_think_ratio = think_ratio(predict_strs)
@@ -390,10 +446,20 @@ def compute_score(predict_strs: list[str], ground_truths: list[str], training_pr
     
     scores = _group_wise_bias(scores, ground_truths)
 
+    scores = _cross_group_action_diversity(predict_strs, ground_truths, scores)
+
+    scores = _prior_bonus(scores, ground_truths)
+
     return scores
 
 if __name__ == "__main__":
-    pr=["<thinking> I need to go back to see the brand option. </thinking>  \n<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"system_button\", \"button\": \"Back\"}}</tool_call>"]
-    gt=[json.dumps({"action": "system_button", "gt_bbox": [-1.0, -1.0], "input_text": "Back", "image_size": [1080, 1920]})]
+    pr=["<thinking> I need to go back to see the brand option. </thinking>  \n<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"system_button\", \"button\": \"Back\"}}</tool_call>",
+        "<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"click\", \"button\": \"Back\"}}</tool_call>",
+        "<thinking> I need to go back to see the brand option. </thinking>  \n<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"system_button\", \"button\": \"Back\"}}</tool_call>",
+        "<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"click\", \"button\": \"Back\"}}</tool_call>"]
+    gt=[json.dumps({"action": "system_button", "gt_bbox": [-1.0, -1.0], "input_text": "Back", "image_size": [1080, 1920], "ui_type": "android_control"}),
+        json.dumps({"action": "system_button", "gt_bbox": [-1.0, -1.0], "input_text": "Back", "image_size": [1080, 1920], "ui_type": "android_control"}),
+        json.dumps({"action": "system_button", "gt_bbox": [-1.0, -1.0], "input_text": "Back", "image_size": [1080, 1920], "ui_type": "android_control"}),
+        json.dumps({"action": "system_button", "gt_bbox": [-1.0, -1.0], "input_text": "Back", "image_size": [1080, 1920], "ui_type": "android_control"})]
     # print(r1gui_accuracy_reward(pr,gt))
     print(compute_score(pr, gt))

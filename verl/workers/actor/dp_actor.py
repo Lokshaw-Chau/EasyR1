@@ -17,7 +17,7 @@ Implement Actor
 
 import os
 from collections import defaultdict
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from einops import rearrange
@@ -31,7 +31,13 @@ from ...protocol import DataProto
 from ...trainer import core_algos
 from ...utils import torch_functional as VF
 from ...utils.py_functional import append_to_dict
-from ...utils.ulysses import gather_outputs_and_unpad, ulysses_pad_and_slice_inputs
+import torch.distributed as dist
+from ...utils.ulysses import (
+    gather_outputs_and_unpad,
+    ulysses_pad_and_slice_inputs,
+    get_ulysses_sequence_parallel_group,
+    get_ulysses_sequence_parallel_world_size,
+)
 from .base import BasePPOActor
 from .config import ActorConfig
 
@@ -53,6 +59,7 @@ class DataParallelPPOActor(BasePPOActor):
         self.rank = int(os.getenv("RANK", "0"))
         self.actor_module = actor_module
         self.actor_optimizer = actor_optimizer
+        self.tool_call_token_id = getattr(self.config, "tool_call_token_id", 151657)
 
         if self.config.entropy_from_logits_with_chunking:
             entropy_from_logits = VF.entropy_from_logits_with_chunking
@@ -255,6 +262,9 @@ class DataParallelPPOActor(BasePPOActor):
         if self.config.use_kl_loss and not self.config.disable_kl:
             select_keys.append("ref_log_probs")
 
+        if self.config.enable_kl_no_think:
+            select_keys.extend(["fake_input_ids", "fake_attention_mask", "fake_position_ids", "fake_responses"])
+
         if "multi_modal_inputs" in data.non_tensor_batch.keys():
             non_tensor_select_keys = ["multi_modal_inputs"]
         else:
@@ -307,6 +317,8 @@ class DataParallelPPOActor(BasePPOActor):
                     first_t_probs = first_t_logprobs.exp()
 
                     # scaling_factor = self.config.clip_mode_scale_factor * (1 - 1 / (1 + np.exp(-self.config.sigmoid_k * (training_process - self.config.sigmoid_x0))))
+                    focal_rho = self.config.focal_rho * (1 - training_process)
+                    entropy_bonus = self.config.entropy_bonus_alpha * (1 - training_process)
 
                     pg_loss, pg_clipfrac_higher, pg_clipfrac_lower, ppo_kl, cond_loss, resp_loss = core_algos.compute_policy_loss(
                         old_log_probs=old_log_probs,
@@ -319,6 +331,7 @@ class DataParallelPPOActor(BasePPOActor):
                         clip_ratio_mode_low=self.config.clip_ratio_low,# +scaling_factor,
                         clip_ratio_dual=self.config.clip_ratio_dual,
                         thinkless_alpha= self.config.think_alpha,
+                        focal_rho=focal_rho,
                     )
 
                     if "ref_log_probs" in model_inputs:
@@ -341,7 +354,85 @@ class DataParallelPPOActor(BasePPOActor):
                         metrics["actor/kl_coef"] = self.config.kl_coef
                         pg_loss = pg_loss + mode_kl_loss * self.config.mode_kl_coef + resp_kl_loss * self.config.kl_coef
 
-                            
+
+                    kl_no_think_metrics = {}
+                    if (
+                        self.config.enable_kl_no_think
+                        and self.config.kl_no_think_coef != 0.0
+                        and all(k in micro_batch.batch.keys() for k in [
+                            "fake_input_ids", "fake_attention_mask", "fake_position_ids", "fake_responses"
+                        ])
+                    ):
+                        # Build fake (no-think) micro-batch and forward without grad
+                        fake_batch = {
+                            "input_ids": micro_batch.batch["fake_input_ids"],
+                            "attention_mask": micro_batch.batch["fake_attention_mask"],
+                            "position_ids": micro_batch.batch["fake_position_ids"],
+                            "responses": micro_batch.batch["fake_responses"],
+                        }
+                        if "multi_modal_inputs" in model_inputs:
+                            fake_batch["multi_modal_inputs"] = model_inputs["multi_modal_inputs"]
+                        with torch.no_grad():
+                            _, fake_log_probs = self._forward_micro_batch(fake_batch, temperature=temperature)
+
+                        # Map existing think log_probs (computed above on original responses)
+                        # to align with fake_responses tokens, avoiding an extra forward.
+                        # For no-think samples, fake_responses == original responses.
+                        # For think samples, fake_responses removes <thinking> section and starts at <tool_call>.
+                        fake_responses = micro_batch.batch["fake_responses"]
+                        bs, Lf = fake_responses.size()
+                        think_log_probs_for_fake = torch.zeros_like(fake_responses, dtype=log_probs.dtype, device=log_probs.device)
+                        response_len = responses.size(1)
+                        # Build non-pad lengths per row to limit indexing
+                        actor_cfg = getattr(self.actor_module, "config", None)
+                        pad_token_id = getattr(actor_cfg, "pad_token_id", 0) if actor_cfg is not None else 0
+                        if pad_token_id is None:
+                            pad_token_id = 0
+                        nonpad_mask_rows = (fake_responses != pad_token_id)
+                        for i in range(bs):
+                            # number of valid tokens in fake_responses[i]
+                            flen = int(nonpad_mask_rows[i].sum().item())
+                            if flen <= 0:
+                                continue
+                            if enforce_nothinking[i]:
+                                # no-think sample: positions align from start
+                                think_log_probs_for_fake[i, :flen] = log_probs[i, :flen]
+                            else:
+                                # think sample: align from first <tool_call> in original responses
+                                tool_mask = (responses[i] == self.tool_call_token_id)
+                                if tool_mask.any():
+                                    start = int(torch.where(tool_mask)[0][0].item())
+                                else:
+                                    start = 0
+                                end = min(start + flen, response_len)
+                                copy_len = max(0, end - start)
+                                if copy_len > 0:
+                                    think_log_probs_for_fake[i, :copy_len] = log_probs[i, start:end]
+
+                        # Token mask: exclude padding, <tool_call>, and no-think samples
+                        not_pad = (fake_responses != pad_token_id).to(think_log_probs_for_fake.dtype)
+                        not_tool = (fake_responses != self.tool_call_token_id).to(think_log_probs_for_fake.dtype)
+                        think_mask = (~enforce_nothinking).unsqueeze(1).to(think_log_probs_for_fake.dtype)
+                        token_mask = not_pad * not_tool * think_mask
+                        # KL(think || no-think) over masked tokens
+                        kld = core_algos.compute_kl(
+                            log_probs=think_log_probs_for_fake,
+                            ref_log_probs=fake_log_probs.detach(),
+                            kl_penalty=self.config.kl_penalty,
+                        )
+                        kl_t2nt = (kld * token_mask).sum() / (token_mask.sum() + 1e-8)
+                        weighted_kl_t2nt = kl_t2nt * getattr(self.config, "kl_think_to_nothink_weight", 1.0)
+                        scaled_kl_no_think = weighted_kl_t2nt * self.config.kl_no_think_coef
+                        pg_loss = pg_loss + scaled_kl_no_think
+
+                        kl_no_think_metrics.update({
+                            "actor/kl_no_think_tokens": token_mask.sum().detach().item(),
+                            "actor/kl_no_think_samples": (~enforce_nothinking).sum().detach().item(),
+                            "actor/kl_think_to_nothink": kl_t2nt.detach().item(),
+                            "actor/kl_think_to_nothink_weighted": weighted_kl_t2nt.detach().item(),
+                            "actor/kl_no_think_loss": scaled_kl_no_think.detach().item(),
+                        })
+
                     if self.calculate_entropy:
                         pg_loss = pg_loss - mode_entropy.mean() * self.config.entropy_bonus_alpha
                         metrics["actor/mode_entropy"] = mode_entropy.mean().detach().item()
@@ -364,6 +455,8 @@ class DataParallelPPOActor(BasePPOActor):
                         "actor/cond_loss": cond_loss.mean().detach().item(),
                         "actor/clip_ratio_mode_high": self.config.clip_ratio_high,# +scaling_factor,
                     }
+                    if kl_no_think_metrics:
+                        batch_metrics.update(kl_no_think_metrics)
                     # Add conditional checks for non-empty tensors
                     if len(first_eot_probs) > 0:
                         batch_metrics['adapt_think/first_eot_token_probs/mean'] = first_eot_probs.mean().detach().item()

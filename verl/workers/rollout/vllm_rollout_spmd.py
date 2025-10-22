@@ -131,11 +131,6 @@ class vLLMRollout(BaseRollout):
     def generate_sequences(self, prompts: DataProto) -> DataProto:
         intervention_think_n = prompts.meta_info.get("intervention_think_n", 0)
         intervention_nothink_n = prompts.meta_info.get("intervention_nothink_n", 0)
-        if intervention_think_n + intervention_nothink_n > self.sampling_params.n:
-            raise ValueError(
-                f"intervention_think_n + intervention_nothink_n should be less than or equal to n, "
-                f"but got {intervention_think_n} + {intervention_nothink_n} > {self.sampling_params.n}."
-            )
         prompts.meta_info.pop("intervention_think_n", None)
         prompts.meta_info.pop("intervention_nothink_n", None)
         
@@ -179,7 +174,14 @@ class vLLMRollout(BaseRollout):
                     self.intervention_think_n = self.config.intervention_think_n
                 print("Using rollout intervention with intervention_nothink_n:", self.intervention_no_think_n, "and intervention_think_n:", self.intervention_think_n)
 
+                if self.intervention_no_think_n + self.intervention_think_n > self.sampling_params.n:
+                    raise ValueError(
+                        f"intervention_think_n + intervention_nothink_n should be less than or equal to n, "
+                        f"but got {self.intervention_no_think_n} + {self.intervention_think_n} > {self.sampling_params.n}."
+                    )
+                
                 no_intervention_n = self.sampling_params.n - self.intervention_no_think_n - self.intervention_think_n
+                
                 if no_intervention_n > 0:
                     sampling_params_nointervention = deepcopy(self.sampling_params)
                     sampling_params_nointervention.n = no_intervention_n
@@ -260,7 +262,18 @@ class vLLMRollout(BaseRollout):
                                 rollout_prob.append(think_ratio)
                     else:
                         print("No no intervention output!")
-                
+            # fake_response_ids = response_id if response_id[0] == 151657 else ids after 151657
+            fake_response_ids = []
+            for ids in response_ids:
+                if ids[0] == 151657:
+                    fake_response_ids.append(ids)
+                else:
+                    try:
+                        index_toolcall = ids.index(151657)
+                        fake_response_ids.append(ids[index_toolcall:])
+                    except ValueError:
+                        fake_response_ids.append(ids)
+
             enforce_nothinking = []
             for response_id in response_ids:
                 if len(response_id) > 0:
@@ -280,6 +293,9 @@ class vLLMRollout(BaseRollout):
             response_ids = VF.pad_2d_list_to_length(
                     response_ids, self.pad_token_id, max_length=self.config.response_length
                 ).to(input_ids.device)
+            fake_response_ids = VF.pad_2d_list_to_length(
+                    fake_response_ids, self.pad_token_id, max_length=self.config.response_length
+                ).to(input_ids.device)
             
             enforce_nothinking = torch.tensor(enforce_nothinking).to(input_ids.device)
             rollout_prob = torch.tensor(rollout_prob).to(input_ids.device)
@@ -289,22 +305,41 @@ class vLLMRollout(BaseRollout):
                 attention_mask = _repeat_interleave(attention_mask, self.sampling_params.n)
                 position_ids = _repeat_interleave(position_ids, self.sampling_params.n)
         
-        sequence_ids = torch.cat([input_ids, response_ids], dim=-1)
+        # Keep prompt-only copies for building both real and fake sequences consistently
+        prompt_input_ids = input_ids
+        prompt_attention_mask = attention_mask
+        prompt_position_ids = position_ids
+
+        sequence_ids = torch.cat([prompt_input_ids, response_ids], dim=-1)
+        fake_sequence_ids = torch.cat([prompt_input_ids, fake_response_ids], dim=-1)
         response_length = response_ids.size(1)
+        fake_response_length = fake_response_ids.size(1)
         delta_position_id = torch.arange(1, response_length + 1, device=position_ids.device)
         delta_position_id = delta_position_id.view(1, -1).expand(batch_size, -1)
+        fake_delta_position_id = torch.arange(1, fake_response_length + 1, device=position_ids.device)
+        fake_delta_position_id = fake_delta_position_id.view(1, -1).expand(batch_size, -1)
+
         if position_ids.dim() == 3:  # qwen2vl mrope
             delta_position_id = delta_position_id.view(batch_size, 1, -1).expand(batch_size, 3, -1)
+            fake_delta_position_id = fake_delta_position_id.view(batch_size, 1, -1).expand(batch_size, 3, -1)
 
         # prompt: left pad + response: right pad
         # attention_mask: [0,0,0,0,1,1,1,1 | 1,1,1,0,0,0,0,0]
         # position_ids:   [0,0,0,0,0,1,2,3 | 4,5,6,7,8,9,10,11]
-        response_position_ids = position_ids[..., -1:] + delta_position_id
-        position_ids = torch.cat([position_ids, response_position_ids], dim=-1)
+        response_position_ids = prompt_position_ids[..., -1:] + delta_position_id
+        fake_response_position_ids = prompt_position_ids[..., -1:] + fake_delta_position_id
+        position_ids = torch.cat([prompt_position_ids, response_position_ids], dim=-1)
+        fake_position_ids = torch.cat([prompt_position_ids, fake_response_position_ids], dim=-1)
+
         response_mask = VF.get_response_mask(
             response_ids=response_ids, eos_token_id=eos_token_id, dtype=attention_mask.dtype
         )
-        attention_mask = torch.cat((attention_mask, response_mask), dim=-1)
+        fake_response_mask = VF.get_response_mask(
+            response_ids=fake_response_ids, eos_token_id=eos_token_id, dtype=attention_mask.dtype
+        )
+    
+        attention_mask = torch.cat((prompt_attention_mask, response_mask), dim=-1)
+        fake_attention_mask = torch.cat((prompt_attention_mask, fake_response_mask), dim=-1)
 
         # all the tp ranks should contain the same data here. data in all ranks are valid
         batch = TensorDict(
@@ -317,6 +352,10 @@ class vLLMRollout(BaseRollout):
                 "position_ids": position_ids,
                 'enforce_nothinking': enforce_nothinking,
                 'rollout_prob': rollout_prob,
+                "fake_input_ids": fake_sequence_ids,
+                "fake_attention_mask": fake_attention_mask,
+                "fake_position_ids": fake_position_ids,
+                "fake_responses": fake_response_ids,
             },
             batch_size=batch_size,
         )

@@ -184,7 +184,7 @@ def r1gui_format_reward(predict_str: str, ground_truth: str) -> float:
                 return 0.0
         elif pred_action in ['key']:
             keys = extract_keys(answer_content)
-            if len(keys) == 0:
+            if keys == "no input text":
                 return 0.0
         elif pred_action in ['terminate']:
             status = extract_status(answer_content)
@@ -260,6 +260,8 @@ def r1gui_accuracy_reward(predict_str: str, ground_truth: str) -> float:
                 return 0.0
         elif pred_action in ['key']:
             pred_keys = extract_keys(predict_str)
+            if 'keys=' in gt_input_text:
+                gt_input_text = gt_input_text.replace('keys=','').strip()
             if calculate_f1_score(pred_keys, gt_input_text)>=0.5:
                 return 1.0
             else:
@@ -309,33 +311,31 @@ def _compute_score(predict_str: str, ground_truth: str, think_ratio: float = 1.0
     
     # Calculate base score
     base_score = accuracy + format
-    mode_ratio = think_ratio if "<thinking>" in predict_str else 1 - think_ratio
+    mode_ratio = think_ratio if not predict_str.startswith("<tool_call>") else 1 - think_ratio
     scale_factor = 1 / mode_ratio
-    # Apply progressive scaling based on training progress
-    if training_progress is not None:
-        # AdaGRPO
-        decay = mode_ratio + 0.5 * (1 - mode_ratio) * (1 + math.cos(math.pi * training_progress))
-        overall_score = base_score * scale_factor * decay
-    else:
-        # Fallback to original behavior when training_progress is not available
-        overall_score = base_score
+    # # # Apply progressive scaling based on training progress
+    # if training_progress is not None:
+    #     # AdaGRPO
+    #     decay = mode_ratio + 0.5 * (1 - mode_ratio) * (1 + math.cos(math.pi * training_progress))
+    #     overall_score = base_score * scale_factor * decay
+    # else:
+    #     # Fallback to original behavior when training_progress is not available
+    overall_score = base_score
 
     return {
         "overall": overall_score,
         "format": format,
         "accuracy": accuracy,
-        "think_ratio": 1.0 if "<thinking>" in predict_str else 0.0,
-        "training_progress": training_progress if training_progress is not None else 0.0,
-        "decay": decay if training_progress is not None else 1.0,
-        "think_acc": accuracy*scale_factor if "<thinking>" in predict_str else 0.0,
-        "no_think_acc": accuracy*scale_factor if "<thinking>" not in predict_str else 0.0,
+        "think_ratio": 1.0 if not predict_str.startswith("<tool_call>") else 0.0,
+        "think_acc": accuracy*scale_factor if not predict_str.startswith("<tool_call>") else 0.0,
+        "no_think_acc": accuracy*scale_factor if predict_str.startswith("<tool_call>") else 0.0,
     }
 
 def think_ratio(predict_strs: list[str]):
     """
     计算 predict_strs 中 <thinking> ... </thinking> 的比例。
     """
-    think_count = sum(1 for s in predict_strs if "<thinking>" in s)
+    think_count = sum(1 for s in predict_strs if not s.startswith("<tool_call>"))
     total_count = len(predict_strs)
     
     if total_count == 0:
@@ -370,6 +370,32 @@ def _group_wise_format_compensation(scores, ground_truths):
         
     return scores
 
+def _group_wise_adaptive_scaling(scores, ground_truths, training_progress):
+    
+    gt2tr_list = {}
+    for i, score in enumerate(scores):
+        ground_truth = ground_truths[i]
+        if ground_truth not in gt2tr_list:
+            gt2tr_list[ground_truth] = []
+        gt2tr_list[ground_truth].append(score["think_ratio"])
+
+    gt2tr = {k: sum(v) / len(v) for k, v in gt2tr_list.items()}
+
+    for i, score in enumerate(scores):
+        tr = gt2tr[ground_truths[i]]
+        mode_ratio = tr if score["think_ratio"] >= 0.5 else 1 - tr
+        scale_factor = 1 / mode_ratio
+        if training_progress is not None:
+            decay = mode_ratio + 0.5 * (1 - mode_ratio) * (1 + math.cos(math.pi * training_progress))
+            score["overall"] = score["overall"] * decay * scale_factor
+            score["decay"] = decay
+        else:
+            score["decay"] = 1.0
+    
+    return scores
+
+        
+
 def _group_wise_bias(scores, ground_truths):
     gt2tr_list = {}
     for i, score in enumerate(scores):
@@ -391,9 +417,11 @@ def compute_score(predict_strs: list[str], ground_truths: list[str], training_pr
     scores = []
     current_think_ratio = think_ratio(predict_strs)
     for predict_str, ground_truth in zip(predict_strs, ground_truths):
-        scores.append(_compute_score(predict_str, ground_truth, current_think_ratio, training_progress))
+        scores.append(_compute_score(predict_str, ground_truth, current_think_ratio, None))
     
     scores = _group_wise_bias(scores, ground_truths)
+
+    scores = _group_wise_adaptive_scaling(scores, ground_truths, training_progress)
 
     return scores
 

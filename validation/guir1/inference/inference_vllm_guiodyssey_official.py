@@ -387,8 +387,8 @@ class Worker:
                 elif pred_action in ['swipe']:
                     pred_coord2, _ = extract_coord2(generated_text)
                     original_sample["pred_coord2"] = [pred_coord2[0]*original_sample["scale"][0],pred_coord2[1]*original_sample["scale"][1]]
-                    x1, y1 = pred_coord
-                    x2, y2 = pred_coord2
+                    x1, y1 = pred_coord[0:2]
+                    x2, y2 = pred_coord2[0:2]
                     delta_x = x2 - x1
                     delta_y = y2 - y1
                     if abs(delta_x) > abs(delta_y):

@@ -56,6 +56,7 @@ def evaluate(args):
 
     score_dict = defaultdict(int)
     think_cnt = 0
+    error_cnt = 0
     for pred, gt in zip(prediction, ground_truth):
         category=gt['group']+'-'+gt['gt_action']
         score_dict[category+"_"+"full"] += 1
@@ -72,10 +73,12 @@ def evaluate(args):
             else:
                 score_dict[category] += 1
 
-        if gt['gt_action'] in ['click','long_press','moveto','doubleclick','rightclick']:
+        if gt['gt_action'] in ['click','long_press','moveto','doubleclick','rightclick', "left_click"]:
             category=gt['group']+'-'+gt['gt_action']+'-'+'grounding'
             gt_bbox=gt['gt_bbox']
             pred_x,pred_y=pred['pred_coord'][:2]
+            if pred_x==0 and pred_y==0:
+                error_cnt+=1
             score_dict[category+"_"+"full"] += 1
             if ((gt_bbox[0]-pred_x)/gt['image_size'][0])**2+((gt_bbox[1]-pred_y)/gt['image_size'][1])**2<0.14**2:
                 score_dict[category] += 1
@@ -85,6 +88,8 @@ def evaluate(args):
             gt_text=gt['gt_input_text']
             pred_text=pred['pred_input_text']
             score_dict[category+"_"+"full"] += 1
+            if pred_text == "no_input_text":
+                error_cnt+=1
             if calculate_f1_score(gt_text,pred_text)>=0.5:
                 score_dict[category] += 1
         # if gt['gt_action'] in ['swipe']:
@@ -134,6 +139,7 @@ def evaluate(args):
     logger.info(f"ALL Step : {(full_step_hit / full_step)}")
     logger.info(f"ALL GR : {(full_gr_hit / full_gr)}")
     logger.info(f"ALL Think : {think_cnt/len(prediction)}")
+    logger.info(f"ALL Error : {error_cnt/len(prediction)}")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

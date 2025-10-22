@@ -166,7 +166,7 @@ def r1gui_format_reward(predict_str: str, ground_truth: str) -> float:
                 return 0.0
 
         if ui_type == "agentnetbench":
-            if pred_action not in ['key', 'type', 'mouse_move', 'left_click', 'right_click', 'double_click', 'scroll', 'terminate', 'left_click_drag']:
+            if pred_action not in ["click", 'key', 'type', 'mouse_move', 'left_click', 'right_click', 'double_click', 'scroll', 'terminate', 'left_click_drag']:
                 print(f"Invalid action: {pred_action} for ui_type: {ui_type}")
                 return 0.0
 
@@ -231,7 +231,7 @@ def r1gui_accuracy_reward(predict_str: str, ground_truth: str) -> float:
             if pred_action not in ['click', 'long_press', 'swipe', 'type', 'system_button', 'terminate']:
                 return 0.0
         if ui_type == "agentnetbench":
-            if pred_action not in ['key', 'type', 'mouse_move', 'left_click', 'right_click', 'double_click', 'scroll', 'terminate', 'left_click_drag']:
+            if pred_action not in ["click", 'key', 'type', 'mouse_move', 'left_click', 'right_click', 'double_click', 'scroll', 'terminate', 'left_click_drag']:
                 return 0.0
 
         if gt_action in ["click", "long_press", "mouse_move", "left_click", "right_click", "double_click", "left_click_drag"]:
@@ -338,30 +338,31 @@ def think_ratio(predict_strs: list[str]):
     
     return think_count / total_count
 
-def _group_wise_format_compensation(scores, ground_truths):
-    # group-wise format_compensation
-    gt2format_list = {}
+def _group_wise_collapse_penalty(scores, ground_truths, theta):
+    # group-wise collapse penalty
+    # think_ratio = sum(score["think_ratio"] for score in scores) / len(scores)
+    gt2tr_list = {}
     for i, score in enumerate(scores):
         ground_truth = ground_truths[i]
-        if ground_truth not in gt2format_list:
-            gt2format_list[ground_truth] = []
-        gt2format_list[ground_truth].append([score["format"], score["think_ratio"]])
+        if ground_truth not in gt2tr_list:
+            gt2tr_list[ground_truth] = []
+        gt2tr_list[ground_truth].append(score["think_ratio"])
 
-    gt2format_diff = {}
-    for k, v in gt2format_list.items():
-        think_format = [x[0] for x in v if x[1] >= 0.5]
-        no_think_format = [x[0] for x in v if x[1] < 0.5]
-        if len(think_format) == 0:
-            think_format = [0]
-        if len(no_think_format) == 0:
-            no_think_format = [0]
-        gt2format_diff[k] = sum(think_format) / len(think_format) - sum(no_think_format) / len(no_think_format)
+    gt2tr = {k: sum(v) / len(v) for k, v in gt2tr_list.items()}
+    print("gt2tr:", gt2tr)
 
-    print("gt2format_diff:", gt2format_diff)
     for i, score in enumerate(scores):
-        diff = gt2format_diff[ground_truths[i]]
-        if score["think_ratio"] > 0.5:  # think
-            score["overall"] = score["overall"] - diff
+        tr = gt2tr[ground_truths[i]] 
+
+        if tr < theta:
+            if score["think_ratio"]<0.5: # no think
+                score["overall"] = score["overall"] - 2
+                score["penalty"] = 1.0 / ((1-tr) * 16)
+                
+        if tr > 1-theta:
+            if score["think_ratio"]>=0.5: # think
+                score["overall"] = score["overall"] - 2
+                score["penalty"] = 1.0 / (tr * 16)
         
     return scores
 
@@ -387,6 +388,8 @@ def compute_score(predict_strs: list[str], ground_truths: list[str], training_pr
     current_think_ratio = think_ratio(predict_strs)
     for predict_str, ground_truth in zip(predict_strs, ground_truths):
         scores.append(_compute_score(predict_str, ground_truth, current_think_ratio, None))
+    
+    scores = _group_wise_collapse_penalty(scores, ground_truths, theta=0.3)
     
     scores = _group_wise_bias(scores, ground_truths)
 

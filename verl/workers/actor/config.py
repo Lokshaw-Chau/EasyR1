@@ -82,6 +82,7 @@ class ActorConfig:
     clip_ratio_low: float = 0.2
     clip_ratio_high: float = 0.3
     clip_mode_scale_factor: float = 0.7
+    focal_rho: float = 2.0
     sigmoid_k: float = 10.0
     sigmoid_x0: float = 0.5
     clip_ratio_dual: float = 3.0
@@ -93,6 +94,12 @@ class ActorConfig:
     use_torch_compile: bool = True
     entropy_from_logits_with_chunking: bool = False
     entropy_bonus_alpha: float = 0.01
+    enable_kl_no_think: bool = False
+    kl_no_think_coef: float = 0.0
+    kl_think_to_nothink_weight: float = 1.0  # Weight for KL(think || no-think)
+    kl_nothink_to_think_weight: float = 1.0  # Weight for KL(no-think || think)
+    tool_call_token_id: int = 151657
+    mode_kl_coef: float = 1.0
     model: ModelConfig = field(default_factory=ModelConfig)
     optim: OptimConfig = field(default_factory=OptimConfig)
     fsdp: FSDPConfig = field(default_factory=FSDPConfig)

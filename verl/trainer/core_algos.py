@@ -298,6 +298,208 @@ def compute_grpo_sep_outcome_advantage(
     
     return advantages, returns
 
+
+@torch.no_grad()
+def compute_grpo_dge_outcome_advantage(
+    token_level_rewards: torch.Tensor,
+    response_mask: torch.Tensor,
+    index: torch.Tensor,
+    enforce_nothinking: torch.Tensor,
+    cross_mode_diversity: torch.Tensor,
+    first_token_probs: torch.Tensor,
+    temperature: float = 0.25,
+    eps: float = 1e-4,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Compute advantage for GRPO-DGE with diversity-guided first-token scaling."""
+
+    bsz, seq_len = token_level_rewards.shape
+    device = token_level_rewards.device
+    dtype = token_level_rewards.dtype
+
+    enforce_nothinking = enforce_nothinking.view(-1).to(torch.bool)
+    first_token_probs = first_token_probs.view(-1).to(device=device, dtype=dtype)
+    cross_mode_diversity = torch.as_tensor(cross_mode_diversity, device=device, dtype=dtype)
+    if cross_mode_diversity.ndim == 0:
+        cross_mode_diversity = cross_mode_diversity.repeat(bsz)
+    else:
+        cross_mode_diversity = cross_mode_diversity.view(bsz, -1)[:, 0]
+
+    advantages = torch.zeros_like(token_level_rewards)
+
+    scores = token_level_rewards.sum(dim=-1)
+    id2score_first = defaultdict(list)
+    id2prob_think = defaultdict(list)
+    id2prob_no_think = defaultdict(list)
+    for i in range(bsz):
+        if enforce_nothinking[i]:
+            id2prob_no_think[index[i]].append(first_token_probs[i])
+        else:
+            id2prob_think[index[i]].append(first_token_probs[i])
+    id2ratio = {}
+    for idx in id2prob_think:
+        think_mean_prob = torch.mean(torch.tensor(id2prob_think[idx])) if idx in id2prob_think else torch.tensor(0.0)
+        id2ratio[(idx, False)] = (1.0 / (think_mean_prob + eps)) ** temperature
+        no_think_mean_prob = torch.mean(torch.tensor(id2prob_no_think[idx])) if idx in id2prob_no_think else torch.tensor(0.0)
+        id2ratio[(idx, True)] = (1.0 / (no_think_mean_prob + eps)) ** temperature
+
+    id2mean_overall, id2std_overall = {}, {}
+    # scale_factor = [1 + cross_mode_diversity[i] * (id2ratio[(index[i], enforce_nothinking[i].item())]-1) for i in range(bsz)]
+    scale_factor = []
+    for i in range(bsz):
+        if (index[i], enforce_nothinking[i].item()) in id2ratio:
+            scale_factor.append(1 + cross_mode_diversity[i] * (id2ratio[(index[i], enforce_nothinking[i].item())]-1))
+        else:
+            scale_factor.append(torch.tensor(1.0, device=device, dtype=dtype))
+    
+    print('Think scale factors:', [scale_factor[i].item() for i in range(bsz) if not enforce_nothinking[i]])
+    print('No-think scale factors:', [scale_factor[i].item() for i in range(bsz) if enforce_nothinking[i]])
+
+    first_token_scores = scores * torch.tensor(scale_factor, device=device, dtype=dtype)
+    for i in range(bsz):
+        id2score_first[index[i]].append(first_token_scores[i])
+
+    for idx in id2score_first:
+        assert len(id2score_first[idx]) > 1, "GRPO needs rollout.n > 1."
+        id2mean_overall[idx] = torch.mean(torch.tensor(id2score_first[idx]))
+        id2std_overall[idx] = torch.std(torch.tensor(id2score_first[idx]))
+    
+    # Normalize first token using standard GRPO
+    for i in range(bsz):
+        advantages[i, 0] = (first_token_scores[i] - id2mean_overall[index[i]]) / (id2std_overall[index[i]] + eps)
+    
+    # For subsequent tokens (t>=1): use separated groups approach
+    if seq_len > 1:
+        # subsequent_rewards = token_level_rewards[:, 1:]  # (bs, seq_len-1)
+        subsequent_scores = scores  # (bs,)
+        
+        # Group by both index and enforce_nothinking flag
+        id2score_think = defaultdict(list)      # enforce_nothinking = False (thinking)
+        id2score_nothink = defaultdict(list)    # enforce_nothinking = True (no thinking)
+        id2mean_sep, id2std_sep = {}, {}
+        
+        for i in range(bsz):
+            if enforce_nothinking[i]:
+                id2score_nothink[index[i]].append(subsequent_scores[i])
+            else:
+                id2score_think[index[i]].append(subsequent_scores[i])
+        
+        # Compute mean and std for thinking group
+        for idx in id2score_think:
+            if len(id2score_think[idx]) > 1:
+                id2mean_sep[(idx, False)] = torch.mean(torch.tensor(id2score_think[idx]))
+                id2std_sep[(idx, False)] = torch.std(torch.tensor(id2score_think[idx]))
+            else:
+                # If only one sample, no normalization needed (keep original score)
+                id2mean_sep[(idx, False)] = torch.mean(torch.tensor(id2score_think[idx]))
+                id2std_sep[(idx, False)] = torch.tensor(1.0)
+        
+        # Compute mean and std for no-thinking group  
+        for idx in id2score_nothink:
+            if len(id2score_nothink[idx]) > 1:
+                id2mean_sep[(idx, True)] = torch.mean(torch.tensor(id2score_nothink[idx]))
+                id2std_sep[(idx, True)] = torch.std(torch.tensor(id2score_nothink[idx]))
+            else:
+                # If only one sample, no normalization needed (keep original score)
+                id2mean_sep[(idx, True)] = torch.mean(torch.tensor(id2score_nothink[idx]))
+                id2std_sep[(idx, True)] = torch.tensor(1.0)
+        
+        # Normalize subsequent tokens based on their respective groups
+        normalized_subsequent_scores = torch.zeros_like(subsequent_scores)
+        for i in range(bsz):
+            group_key = (index[i], enforce_nothinking[i].item())
+            # if group_key in id2mean_sep:
+            normalized_subsequent_scores[i] = (subsequent_scores[i] - id2mean_sep[group_key]) / (id2std_sep[group_key] + eps)
+            # else:
+            #     # If group_key not found, keep original score (shouldn't happen if data is consistent)
+            #     print(f"Warning: Group key {group_key} not found in id2mean_sep. Using original score.")
+            #     normalized_subsequent_scores[i] = subsequent_scores[i]
+        advantages[:, 1:] = normalized_subsequent_scores.unsqueeze(-1) * response_mask[:, 1:]
+        # Distribute the normalized subsequent score across subsequent tokens
+        # Use the response mask to only apply to valid tokens
+        # for i in range(bsz):
+        #     for t in range(1, seq_len):
+        #         if response_mask[i, t] > 0:  # Only for valid tokens
+        #             advantages[i, t] = normalized_subsequent_scores[i]
+
+    # Apply response mask to final advantages
+    
+    advantages = advantages * response_mask
+    returns = advantages.clone()
+    
+    return advantages, returns
+
+@torch.no_grad()
+def compute_grpo_b_dge_outcome_advantage(
+    token_level_rewards: torch.Tensor,
+    response_mask: torch.Tensor,
+    index: torch.Tensor,
+    enforce_nothinking: torch.Tensor,
+    cross_mode_diversity: torch.Tensor,
+    rollout_prob: torch.Tensor,
+    alpha: float = 0.5,
+    eps: float = 1e-6,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Compute advantage for GRPO-DGE with diversity-guided first-token scaling."""
+
+    bsz, seq_len = token_level_rewards.shape
+    device = token_level_rewards.device
+    dtype = token_level_rewards.dtype
+
+    scores = token_level_rewards.sum(dim=-1)
+    id2score = defaultdict(list)
+    id2mean, id2std = {}, {}
+
+    bsz = scores.shape[0]
+    for i in range(bsz):
+        id2score[index[i]].append(scores[i])
+
+    for idx in id2score:
+        assert len(id2score[idx]) > 1, "GRPO needs rollout.n > 1."
+        id2mean[idx] = torch.mean(torch.tensor(id2score[idx]))
+        id2std[idx] = torch.std(torch.tensor(id2score[idx]))
+
+    for i in range(bsz):
+        scores[i] = (scores[i] - id2mean[index[i]]) / (id2std[index[i]] + eps)
+
+    enforce_nothinking = enforce_nothinking.view(-1).to(torch.bool)
+    cross_mode_diversity = torch.as_tensor(cross_mode_diversity, device=device, dtype=dtype)
+    if cross_mode_diversity.ndim == 0:
+        cross_mode_diversity = cross_mode_diversity.repeat(bsz)
+    else:
+        cross_mode_diversity = cross_mode_diversity.view(bsz, -1)[:, 0]
+
+    advantages = scores.unsqueeze(-1) * response_mask
+
+    id2score_first = defaultdict(list)
+
+    id2mean_overall, id2std_overall = {}, {}
+    # scale_factor = [1 + cross_mode_diversity[i] * (1/(rollout_prob[i]+eps)-1) if rollout_prob[i] < 0.3 else torch.tensor(1.0, device=device, dtype=dtype) for i in range(bsz)]
+    # scale_factor = [1 + (1/(rollout_prob[i]+eps)-1) if rollout_prob[i] < 0.3 else torch.tensor(1.0, device=device, dtype=dtype) for i in range(bsz)]
+    # DivScore(mode) = -log( p_batch(mode) )
+    div_score = [ -torch.log(rollout_prob[i]) * alpha if scores[i] >= 1.5 else torch.tensor(0.0, device=device, dtype=dtype) for i in range(bsz)]
+    
+    print('Think div_score:', [div_score[i].item() for i in range(bsz) if not enforce_nothinking[i]])
+    print('No-think div_score:', [div_score[i].item() for i in range(bsz) if enforce_nothinking[i]])
+
+    first_token_scores = scores + torch.tensor(div_score, device=device, dtype=dtype)
+    for i in range(bsz):
+        id2score_first[index[i]].append(first_token_scores[i])
+
+    for idx in id2score_first:
+        assert len(id2score_first[idx]) > 1, "GRPO needs rollout.n > 1."
+        id2mean_overall[idx] = torch.mean(torch.tensor(id2score_first[idx]))
+        id2std_overall[idx] = torch.std(torch.tensor(id2score_first[idx]))
+    
+    # Normalize first token using standard GRPO
+    for i in range(bsz):
+        advantages[i, 0] = (first_token_scores[i] - id2mean_overall[index[i]]) / (id2std_overall[index[i]] + eps)
+    
+    
+    advantages = advantages * response_mask
+    returns = advantages.clone()
+    
+    return advantages, returns
+
 @torch.no_grad()
 def compute_rloo_outcome_advantage(
     token_level_rewards: torch.Tensor, response_mask: torch.Tensor, index: torch.Tensor
@@ -411,6 +613,23 @@ def compute_rewards(
     return token_level_scores - kl * kl_ratio
 
 
+def compute_policy_loss_simko(
+    old_log_probs: torch.Tensor,
+    log_probs: torch.Tensor,
+    advantages: torch.Tensor,
+    response_mask: torch.Tensor,
+    clip_ratio_low: float,
+    clip_ratio_high: float,
+    clip_ratio_mode_high: float,
+    clip_ratio_mode_low: float,
+    clip_ratio_dual: float,
+    thinkless_alpha: float,
+    focal_rho: float = -1.0,
+    positive_smooth_alpha: float = -1.0,
+    negation_penalty: float = -1.0,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    
+
 def compute_policy_loss(
     old_log_probs: torch.Tensor,
     log_probs: torch.Tensor,
@@ -422,6 +641,9 @@ def compute_policy_loss(
     clip_ratio_mode_low: float,
     clip_ratio_dual: float,
     thinkless_alpha: float,
+    focal_rho: float = -1.0,
+    positive_smooth_alpha: float = -1.0,
+    negation_penalty: float = -1.0,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Compute the policy loss.
 
@@ -454,6 +676,31 @@ def compute_policy_loss(
             a float number indicating the mean KL divergence between the old policy and the new policy
 
     """
+    if focal_rho >= 0:
+        with torch.no_grad(): # 确保这部分计算不产生梯度
+            # 1. 获取第一个token (模式控制token) 的新策略概率 π_θ
+            # log_probs的形状是 (bs, response_length)
+            mode_log_prob = log_probs[:, 0]
+            mode_prob = torch.exp(mode_log_prob)
+
+            # 2. 计算Focal Loss调制因子 (1 - π_θ)^ρ
+            # 为了数值稳定性，在π_θ接近1时进行clamp
+            focal_factor = torch.pow(1 - mode_prob.clamp(max=1-1e-7), focal_rho)
+            
+            # 增加一个维度以匹配advantages的形状
+            focal_factor = focal_factor.unsqueeze(1) # shape: (bs, 1)
+
+        # 3. 创建一个新的advantages张量，只调制第一个token的优势
+        # 我们复制advantages以避免原地修改可能带来的副作用
+        original_advantages = advantages
+        modulated_advantages = torch.clone(original_advantages)
+        
+        # 只修改第一个token (t=0) 的优势
+        modulated_advantages[:, 0] = modulated_advantages[:, 0] * focal_factor[:, 0]
+        
+        # 将advantages替换为被调制过的版本
+        advantages = modulated_advantages
+
     negative_approx_kl = log_probs - old_log_probs
     # clamp the ratio before exp to avoid nan
     # see: https://github.com/pytorch/pytorch/issues/10729

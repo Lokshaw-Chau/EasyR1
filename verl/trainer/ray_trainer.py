@@ -69,6 +69,8 @@ class AdvantageEstimator(str, Enum):
     GAE = "gae"
     GRPO = "grpo"
     GRPO_SEP = "grpo_sep"
+    GRPO_DGE = "grpo_dge"
+    GRPO_B_DGE = "grpo_b_dge"
     REINFORCE_PLUS_PLUS = "reinforce_plus_plus"
     REMAX = "remax"
     RLOO = "rloo"
@@ -159,6 +161,40 @@ def compute_advantage(data: DataProto, adv_estimator: AdvantageEstimator, gamma:
         )
     elif adv_estimator == AdvantageEstimator.RLOO:
         advantages, returns = core_algos.compute_rloo_outcome_advantage(token_level_rewards, response_mask, index)
+    elif adv_estimator == AdvantageEstimator.GRPO_DGE:
+        cross_mode_diversity = (
+            data.batch["cross_mode_diversity"]
+            if "cross_mode_diversity" in data.batch.keys()
+            else torch.zeros(token_level_rewards.shape[0], device=token_level_rewards.device)
+        )
+        first_token_log_probs = data.batch["old_log_probs"]
+        enforce_nothinking = data.batch["enforce_nothinking"]
+        first_token_probs = torch.exp(first_token_log_probs[:, 0])
+        advantages, returns = core_algos.compute_grpo_dge_outcome_advantage(
+            token_level_rewards,
+            response_mask,
+            index,
+            enforce_nothinking,
+            cross_mode_diversity,
+            first_token_probs,
+        )
+    elif adv_estimator == AdvantageEstimator.GRPO_B_DGE:
+        cross_mode_diversity = (
+            data.batch["cross_mode_diversity"]
+            if "cross_mode_diversity" in data.batch.keys()
+            else torch.zeros(token_level_rewards.shape[0], device=token_level_rewards.device)
+        )
+        # first_token_log_probs = data.batch["old_log_probs"]
+        rollout_prob = data.batch["rollout_prob"]
+        enforce_nothinking = data.batch["enforce_nothinking"]
+        advantages, returns = core_algos.compute_grpo_b_dge_outcome_advantage(
+            token_level_rewards,
+            response_mask,
+            index,
+            enforce_nothinking,
+            cross_mode_diversity,
+            rollout_prob,
+        )
     else:
         raise NotImplementedError
 
@@ -507,7 +543,7 @@ class RayPPOTrainer:
                     with timer("gen", timing_raw):  # wg: worker group
                         # dynamic n
                         if self.config.algorithm.ri_schedule == "linear":
-                            intervention_n = int((1 - self.global_step/self.training_steps) * 9)
+                            intervention_n = int((1 - self.global_step/self.training_steps) * 7) + 2
                             intervention_think_n = intervention_n
                             intervention_nothink_n = intervention_n
                         elif self.config.algorithm.ri_schedule == "manual":
@@ -589,6 +625,16 @@ class RayPPOTrainer:
                         # get token level scores
                         reward_tensor, reward_metrics = ray.get(reward_ref)
                         batch.batch["token_level_scores"] = reward_tensor
+                        cross_mode_div = reward_metrics.get("cross_mode_diversity")
+                        if cross_mode_div is None:
+                            cross_mode_div = torch.zeros(
+                                reward_tensor.shape[0], device=reward_tensor.device, dtype=reward_tensor.dtype
+                            )
+                        else:
+                            cross_mode_div = torch.as_tensor(
+                                cross_mode_div, device=reward_tensor.device, dtype=reward_tensor.dtype
+                            )
+                        batch.batch["cross_mode_diversity"] = cross_mode_div
                         reward_metrics = {f"reward/{k}": v for k, v in reduce_metrics(reward_metrics).items()}
                         metrics.update(reward_metrics)
 
