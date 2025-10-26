@@ -28,7 +28,7 @@ import torch.nn.functional as F
 
 from ..utils import torch_functional as VF
 from copy import deepcopy
-
+from scipy.special import comb
 
 if TYPE_CHECKING:
     from .config import AlgorithmConfig
@@ -179,6 +179,73 @@ def compute_grpo_outcome_advantage(
     returns = scores.unsqueeze(-1) * response_mask
     return returns, returns
 
+@torch.no_grad()
+def compute_pass_at_k_outcome_advantage(
+    token_level_rewards: torch.Tensor, response_mask: torch.Tensor, index: torch.Tensor, eps: float = 1e-6
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Compute advantage for GRPO, operating only on Outcome reward
+    (with only one scalar reward for each response).
+
+    Args:
+        token_level_rewards: `(torch.Tensor)`
+            shape: (bs, response_length)
+        response_mask: `(torch.Tensor)`
+            shape: (bs, response_length)
+        index: `(torch.Tensor)`
+            shape: (bs,) - index for grouping
+        eps: `(float)`
+            small value to avoid division by zero
+
+    Returns:
+        advantages: `(torch.Tensor)`
+            shape: (bs, response_length)
+        returns: `(torch.Tensor)`
+            shape: (bs, response_length)
+
+    """
+    def calc_adv(val, k):
+        c = len(np.where(val==2)[0])
+        print(c)
+        n = len(val)
+        rho = 1 - comb(n-c, k) / comb(n, k)
+        sigma = np.sqrt(rho * (1 - rho))
+        adv_p = (1 - rho) / (sigma + 1e-6)
+        adv_n = (1 - rho - comb(n-c-1, k-1)/comb(n-1,k-1)) / (sigma + 1e-6)
+        # new_val = np.where(val==2, adv_p, val)
+        # new_val = np.where((new_val==0 or new_val==1), adv_n, new_val)
+        return adv_p, adv_n
+    
+    scores = token_level_rewards.sum(dim=-1)
+    id2score = defaultdict(list)
+    uid2sid = defaultdict(list)
+    # id2mean, id2std = {}, {}
+    id2pos, id2neg = {}, {}
+
+    bsz = scores.shape[0]
+    for i in range(bsz):
+        id2score[index[i]].append(scores[i])
+        uid2sid[index[i]].append(i)
+
+    for idx in id2score:
+        assert len(id2score[idx]) > 1, "GRPO needs rollout.n > 1."
+        # id2mean[idx] = torch.mean(torch.tensor(id2score[idx]))
+        id2pos[idx], id2neg[idx] = calc_adv(np.array(id2score[idx]), k=4)
+        print(f"Group {idx}: pos_adv={id2pos[idx]}, neg_adv={id2neg[idx]}")
+        # id2std[idx] = torch.std(torch.tensor(id2score[idx]))
+        # reward = np.array([id2score[idx]])
+        # adv = calc_adv(reward, k=4)
+
+    for i in range(bsz):
+        if scores[i] > 1.5:
+            scores[i] = torch.tensor(id2pos[index[i]], device=scores.device, dtype=scores.dtype)
+        else:
+            scores[i] = torch.tensor(id2neg[index[i]], device=scores.device, dtype=scores.dtype)
+    
+    print(scores)
+
+    returns = scores.unsqueeze(-1) * response_mask
+    return returns, returns
 
 # NOTE: GRPO with separated thinking/non-thinking groups
 @torch.no_grad()
@@ -611,23 +678,6 @@ def compute_rewards(
 ) -> torch.Tensor:
     kl = log_probs - ref_log_probs
     return token_level_scores - kl * kl_ratio
-
-
-def compute_policy_loss_simko(
-    old_log_probs: torch.Tensor,
-    log_probs: torch.Tensor,
-    advantages: torch.Tensor,
-    response_mask: torch.Tensor,
-    clip_ratio_low: float,
-    clip_ratio_high: float,
-    clip_ratio_mode_high: float,
-    clip_ratio_mode_low: float,
-    clip_ratio_dual: float,
-    thinkless_alpha: float,
-    focal_rho: float = -1.0,
-    positive_smooth_alpha: float = -1.0,
-    negation_penalty: float = -1.0,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     
 
 def compute_policy_loss(
@@ -685,7 +735,8 @@ def compute_policy_loss(
 
             # 2. 计算Focal Loss调制因子 (1 - π_θ)^ρ
             # 为了数值稳定性，在π_θ接近1时进行clamp
-            focal_factor = torch.pow(1 - mode_prob.clamp(max=1-1e-7), focal_rho)
+            focal_factor_pos = torch.pow(1 - mode_prob.clamp(max=1-1e-7), focal_rho)
+            focal_factor_neg = torch.pow(mode_prob.clamp(min=1e-7), focal_rho)
             
             # 增加一个维度以匹配advantages的形状
             focal_factor = focal_factor.unsqueeze(1) # shape: (bs, 1)

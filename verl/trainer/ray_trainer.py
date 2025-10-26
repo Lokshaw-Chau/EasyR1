@@ -74,6 +74,7 @@ class AdvantageEstimator(str, Enum):
     REINFORCE_PLUS_PLUS = "reinforce_plus_plus"
     REMAX = "remax"
     RLOO = "rloo"
+    PASS_AT_K = "pass_at_k"
 
 
 @dataclass
@@ -145,6 +146,10 @@ def compute_advantage(data: DataProto, adv_estimator: AdvantageEstimator, gamma:
         )
     elif adv_estimator == AdvantageEstimator.GRPO:
         advantages, returns = core_algos.compute_grpo_outcome_advantage(token_level_rewards, response_mask, index)
+    elif adv_estimator == AdvantageEstimator.PASS_AT_K:
+        advantages, returns = core_algos.compute_pass_at_k_outcome_advantage(
+            token_level_rewards, response_mask, index
+        )
     elif adv_estimator == AdvantageEstimator.GRPO_SEP:
         enforce_nothinking = data.batch["enforce_nothinking"]
         advantages, returns = core_algos.compute_grpo_sep_outcome_advantage(

@@ -1,6 +1,6 @@
 import re
 import json
-import math
+# import math
 
 def extract_action(content):
     # answer_tag_pattern = r'<tool_call>(.*?)</tool_call>'
@@ -303,6 +303,7 @@ def r1gui_accuracy_reward(predict_str: str, ground_truth: str) -> float:
             return 0.0
         
     except Exception as e:
+        print(f"Error in accuracy reward calculation: {e}")
         return 0.0
     
 def _compute_score(predict_str: str, ground_truth: str, think_ratio: float = 1.0, training_progress: float = None):
@@ -338,31 +339,26 @@ def think_ratio(predict_strs: list[str]):
     
     return think_count / total_count
 
-def _group_wise_format_compensation(scores, ground_truths):
-    # group-wise format_compensation
-    gt2format_list = {}
+def _pass_at_accracy_for_each_query(scores, ground_truths):
+    gt2think_acc = {}
+    gt2nothink_acc = {}
     for i, score in enumerate(scores):
         ground_truth = ground_truths[i]
-        if ground_truth not in gt2format_list:
-            gt2format_list[ground_truth] = []
-        gt2format_list[ground_truth].append([score["format"], score["think_ratio"]])
-
-    gt2format_diff = {}
-    for k, v in gt2format_list.items():
-        think_format = [x[0] for x in v if x[1] >= 0.5]
-        no_think_format = [x[0] for x in v if x[1] < 0.5]
-        if len(think_format) == 0:
-            think_format = [0]
-        if len(no_think_format) == 0:
-            no_think_format = [0]
-        gt2format_diff[k] = sum(think_format) / len(think_format) - sum(no_think_format) / len(no_think_format)
-
-    print("gt2format_diff:", gt2format_diff)
+        if ground_truth not in gt2think_acc:
+            gt2think_acc[ground_truth] = []
+            gt2nothink_acc[ground_truth] = []
+        gt2think_acc[ground_truth].append(score["think_acc"])
+        gt2nothink_acc[ground_truth].append(score["no_think_acc"])
+    
     for i, score in enumerate(scores):
-        diff = gt2format_diff[ground_truths[i]]
-        if score["think_ratio"] > 0.5:  # think
-            score["overall"] = score["overall"] - diff
-        
+        think_acc = max(gt2think_acc[ground_truths[i]])
+        no_think_acc = max(gt2nothink_acc[ground_truths[i]])
+        if score["think_ratio"] > 0.5:
+            score["think_pass_at_accuracy"] = think_acc
+            score["nothink_pass_at_accuracy"] = 0.0
+        else:
+            score["nothink_pass_at_accuracy"] = no_think_acc
+            score["think_pass_at_accuracy"] = 0.0
     return scores
 
 def _group_wise_bias(scores, ground_truths):
@@ -390,10 +386,18 @@ def compute_score(predict_strs: list[str], ground_truths: list[str], training_pr
     
     scores = _group_wise_bias(scores, ground_truths)
 
+    scores = _pass_at_accracy_for_each_query(scores, ground_truths)
+
     return scores
 
 if __name__ == "__main__":
-    pr=["<thinking> I need to go back to see the brand option. </thinking>  \n<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"system_button\", \"button\": \"Back\"}}</tool_call>"]
-    gt=[json.dumps({"action": "system_button", "gt_bbox": [-1.0, -1.0], "input_text": "Back", "image_size": [1080, 1920]})]
+    pr=["<thinking> I need to go back to see the brand option. </thinking>  \n<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"system_button\", \"button\": \"Back\"}}</tool_call>",
+        "<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"system_button\", \"button\": \"Back\"}}</tool_call>",
+        "<thinking> I need to go back to see the brand option. </thinking>  \n<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"system_button\", \"button\": \"Menu\"}}</tool_call>",
+        "<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"system_button\", \"button\": \"Menu\"}}</tool_call>"]
+    gt=[json.dumps({"action": "system_button", "gt_bbox": [-1.0, -1.0], "input_text": "Back", "image_size": [1080, 1920], "ui_type": "android_control"}),
+        json.dumps({"action": "system_button", "gt_bbox": [-1.0, -1.0], "input_text": "Back", "image_size": [1080, 1920], "ui_type": "android_control"}),
+        json.dumps({"action": "system_button", "gt_bbox": [-1.0, -1.0], "input_text": "Back", "image_size": [1080, 1920], "ui_type": "android_control"}),
+        json.dumps({"action": "system_button", "gt_bbox": [-1.0, -1.0], "input_text": "Back", "image_size": [1080, 1920], "ui_type": "android_control"})]
     # print(r1gui_accuracy_reward(pr,gt))
     print(compute_score(pr, gt))

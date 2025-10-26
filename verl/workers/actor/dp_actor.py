@@ -413,24 +413,33 @@ class DataParallelPPOActor(BasePPOActor):
                         not_pad = (fake_responses != pad_token_id).to(think_log_probs_for_fake.dtype)
                         not_tool = (fake_responses != self.tool_call_token_id).to(think_log_probs_for_fake.dtype)
                         think_mask = (~enforce_nothinking).unsqueeze(1).to(think_log_probs_for_fake.dtype)
-                        token_mask = not_pad * not_tool * think_mask
+                        # mask out samples not start with 151657
+                        first_token_mask = (fake_responses[:,0] == self.tool_call_token_id).unsqueeze(1).to(think_log_probs_for_fake.dtype)
+                        token_mask = not_pad * not_tool * think_mask * first_token_mask
                         # KL(think || no-think) over masked tokens
-                        kld = core_algos.compute_kl(
+                        kld_t2nt = core_algos.compute_kl(
                             log_probs=think_log_probs_for_fake,
                             ref_log_probs=fake_log_probs.detach(),
                             kl_penalty=self.config.kl_penalty,
                         )
-                        kl_t2nt = (kld * token_mask).sum() / (token_mask.sum() + 1e-8)
-                        weighted_kl_t2nt = kl_t2nt * getattr(self.config, "kl_think_to_nothink_weight", 1.0)
-                        scaled_kl_no_think = weighted_kl_t2nt * self.config.kl_no_think_coef
-                        pg_loss = pg_loss + scaled_kl_no_think
+                        kldnt2t = core_algos.compute_kl(
+                            log_probs=fake_log_probs,
+                            ref_log_probs=think_log_probs_for_fake.detach(),
+                            kl_penalty=self.config.kl_penalty,
+                        )
+                        kl_t2nt = (kld_t2nt * token_mask).sum() / (token_mask.sum() + 1e-8)
+                        kl_nt2t = (kldnt2t * token_mask).sum() / (token_mask.sum() + 1e-8)
+                        #weighted_kl_t2nt = kl_t2nt * getattr(self.config, "kl_think_to_nothink_weight", 1.0)
+                        # scaled_kl_no_think = weighted_kl_t2nt * self.config.kl_no_think_coef
+                        tnt_mutual_kl = kl_t2nt + kl_nt2t
+                        pg_loss = pg_loss + tnt_mutual_kl * self.config.kl_no_think_coef
 
                         kl_no_think_metrics.update({
                             "actor/kl_no_think_tokens": token_mask.sum().detach().item(),
                             "actor/kl_no_think_samples": (~enforce_nothinking).sum().detach().item(),
                             "actor/kl_think_to_nothink": kl_t2nt.detach().item(),
-                            "actor/kl_think_to_nothink_weighted": weighted_kl_t2nt.detach().item(),
-                            "actor/kl_no_think_loss": scaled_kl_no_think.detach().item(),
+                            "actor/kl_nothink_to_think": kl_nt2t.detach().item(),
+                            "actor/tnt_mutual_kl": tnt_mutual_kl.detach().item(),
                         })
 
                     if self.calculate_entropy:
