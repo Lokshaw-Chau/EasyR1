@@ -34,6 +34,29 @@ if TYPE_CHECKING:
     from .config import AlgorithmConfig
 
 
+def row_quantile_masked(x: torch.Tensor, mask: torch.Tensor, q: float, eps=1e-8):
+    """
+    Compute quantile for each row in a masked tensor.
+
+    Args:
+        x: Input tensor of shape (B, T)
+        mask: Boolean mask of shape (B, T)
+        q: Quantile value between 0 and 1
+        eps: Small epsilon value for numerical stability
+
+    Returns:
+        Tensor of shape (B,) containing the quantile for each row
+    """
+    B, T = x.shape
+    qs = []
+    for b in range(B):
+        xb = x[b][mask[b]]
+        if xb.numel() == 0:
+            xb = x[b]
+        qs.append(torch.quantile(xb, q))
+    return torch.stack(qs, dim=0)  # [B]
+
+
 class KLController(ABC):
     kl_coef: float
     """KL coefficient."""
@@ -678,7 +701,176 @@ def compute_rewards(
 ) -> torch.Tensor:
     kl = log_probs - ref_log_probs
     return token_level_scores - kl * kl_ratio
-    
+
+def compute_policy_loss_simko(old_log_prob, old_log_probs_topk, log_prob, topk_log_probs, entropy, advantages, eos_mask, cliprange, token_level_scores,max_token,mix_topk_coef=0.01,tau=1.0):
+    """Adapted from https://github.com/huggingface/trl/blob/main/trl/trainer/ppo_trainer.py#L1122
+
+    SIMKO (Smoothed Importance-weighted Multi-token Knowledge Optimization) with first-token-only mixing.
+
+    This implementation applies the SIMKO mixing strategy ONLY to the first response token (position 0).
+    For all other tokens, standard PPO loss is used.
+
+    Args:
+        old_log_prob: `(torch.Tensor)`
+            shape: (bs, response_length)
+        old_log_probs_topk: `(torch.Tensor)`
+            shape: (bs, response_length, K) - top-K log probs from old policy
+        log_prob: `(torch.Tensor)`
+            shape: (bs, response_length)
+        topk_log_probs: `(torch.Tensor)`
+            shape: (bs, response_length, K) - top-K log probs from current policy
+        entropy: `(torch.Tensor)`
+            shape: (bs, response_length)
+        advantages: `(torch.Tensor)`
+            shape: (bs, response_length)
+        eos_mask: `(torch.Tensor)`
+            shape: (bs, response_length)
+        cliprange: (float)
+            The clip range used in PPO. See https://arxiv.org/abs/1707.06347
+        token_level_scores: `(torch.Tensor)`
+            shape: (bs, response_length) - correctness labels
+        max_token: `(torch.Tensor)`
+            shape: (bs, response_length) - whether predicted token matches actual
+        mix_topk_coef: (float)
+            Mixing coefficient for top-K smoothing (default: 0.01)
+        tau: (float)
+            Quantile threshold for entropy-based mixing (default: 1.0)
+
+    Returns:
+        pg_loss: `a scalar torch.Tensor`
+            policy gradient loss computed via SIMKO-PPO
+        pg_clipfrac: `list of torch.Tensor`
+            [overall clipfrac, first-token clipfrac]
+        ppo_kl: `a scalar torch.Tensor`
+            mean KL divergence
+        cond_loss_for_log: `torch.Tensor`
+            per-sample loss for first token (for logging)
+        resp_loss_for_log: `torch.Tensor`
+            per-sample loss for response tokens (for logging)
+        simko_metrics: `dict`
+            additional SIMKO statistics
+
+    """
+    correct_idx = token_level_scores.sum(-1) == 1
+    incorrect_idx = token_level_scores.sum(-1) == 0
+    K = topk_log_probs.size(-1)
+    sel_cols = [i for i in range(K) if i < K]
+
+    if len(sel_cols) == 0:
+        topk_sum = torch.zeros_like(log_prob)
+    else:
+
+        topk_selected = torch.stack([topk_log_probs[..., i] for i in sel_cols], dim=-1)
+        log_prob_diff_bar = log_prob - old_log_prob  # (bs, T)
+        old_topk_log_probs = old_log_probs_topk
+        log_prob_diff_topk = topk_selected - old_topk_log_probs  # (bs, T, K)
+        numerator = torch.exp(log_prob_diff_bar.detach())  # (bs, T)
+        denominator = torch.exp(log_prob_diff_topk.detach())  # (bs, T, K)
+        epsilon = 1e-8
+        top_i_terms = (numerator.unsqueeze(-1) / (denominator + epsilon)) * torch.exp(log_prob_diff_topk)  # (bs, T, K)
+
+
+        topk_sum = top_i_terms.sum(dim=-1)
+
+
+    tls = token_level_scores
+    B, T = log_prob.shape
+    if correct_idx.dim() == 1 and correct_idx.size(0) == T:
+        correct_mask = correct_idx.unsqueeze(0).expand(B, -1)   # (B,T)
+    else:
+        correct_mask = correct_idx.view(B, 1).expand(B, T)
+    tls_T =correct_mask
+    tls_T = tls_T.to(log_prob.dtype).to(log_prob.device)
+
+    has_label = tls_T > 0
+
+
+    if eos_mask.dtype != torch.bool:
+        eos_mask_bool = (eos_mask > 0)
+    else:
+        eos_mask_bool = eos_mask
+    eos_mask_bool = eos_mask_bool.to(has_label.device)
+
+    # threshold = row_quantile_masked(entropy, eos_mask_bool, q=tau)
+    # threshold = 
+    # threshold = threshold.view(-1, 1)
+
+    # w = (entropy > threshold).float()
+
+    # MODIFIED: Create first-token-only mask
+    first_token_mask = torch.zeros_like(eos_mask_bool, dtype=torch.float32)
+    first_token_mask[:, 0] = 1.0  # Only the first response token (position 0)
+
+    # MODIFIED: Apply SIMKO mixing only to the first token
+    mix_topk_pos = mix_topk_coef * eos_mask_bool * first_token_mask
+    mix_main_pos = 1.0 - mix_topk_pos
+
+    correct_mask = has_label & eos_mask_bool
+
+
+
+    negative_approx_kl = log_prob - old_log_prob
+
+    ratio = torch.exp(negative_approx_kl)
+    ppo_kl = VF.masked_mean(-negative_approx_kl, eos_mask)
+    ratio = torch.exp((log_prob - old_log_prob))
+
+    # MODIFIED: SIMKO mixing is now only applied where mix_topk_pos > 0 (i.e., first token)
+    ratio = torch.where(
+        correct_mask,
+        mix_main_pos * torch.exp((log_prob - old_log_prob)) + (mix_topk_pos / float(K)) * topk_sum,
+        ratio
+    )
+
+    if eos_mask.dtype != torch.bool:
+        eos_mask_bool = (eos_mask > 0)
+    else:
+        eos_mask_bool = eos_mask
+    eos_mask_bool = eos_mask_bool.to(entropy.device)
+
+    scores = advantages
+    neg_mask = (scores.sum(dim=-1) < 0).unsqueeze(-1)
+    # MODIFIED: Apply negative sample scaling only to the first token
+    neg_mask = (max_token > 0) & neg_mask & (first_token_mask > 0)
+    scale = torch.ones_like(scores)
+    scale = scale.masked_fill(neg_mask, 1.1)
+    advantages = advantages * scale
+
+
+    pg_losses = -advantages * ratio
+    pg_losses2 = -advantages * torch.clamp(ratio, 1.0 - cliprange, 1.0 + cliprange)
+
+    pg_loss = VF.masked_mean(torch.max(pg_losses, pg_losses2), eos_mask)
+    pg_clipfrac = VF.masked_mean(torch.gt(pg_losses2, pg_losses).float(), eos_mask)
+
+    # Masks
+    cond_mask = eos_mask.clone()
+    cond_mask[:, 1:] = 0                    # only t = 0, the control token
+    resp_mask = eos_mask.clone()
+    resp_mask[:, 0]  = 0                    # t ≥ 1, the response tokens
+
+    cond_loss_for_log = VF.masked_mean(pg_losses, cond_mask, dim=1)
+    resp_loss_for_log = VF.masked_mean(pg_losses, resp_mask, dim=1)
+
+    pg_clipfrac_all = VF.masked_mean(pg_clipfrac, eos_mask)
+    pg_clipfrac_cond = VF.masked_mean(pg_clipfrac, cond_mask)
+
+    pg_clipfrac = [pg_clipfrac_all, pg_clipfrac_cond]
+
+    # Compute statistics for first token (response token, not mode token)
+    # First response token is at position 0
+    # first_resp_high_entropy = (entropy[:, 0] > threshold.squeeze(-1)).float()  # (bs,)
+    # first_resp_high_entropy_ratio = first_resp_high_entropy.mean()
+
+    # Store additional SIMKO metrics in a dict
+    simko_metrics = {
+        # 'first_resp_high_entropy_ratio': first_resp_high_entropy_ratio,
+        # 'entropy_threshold': threshold.mean(),
+        
+    }
+
+    return pg_loss, pg_clipfrac, ppo_kl, cond_loss_for_log, resp_loss_for_log, simko_metrics
+        
 
 def compute_policy_loss(
     old_log_probs: torch.Tensor,
@@ -691,9 +883,7 @@ def compute_policy_loss(
     clip_ratio_mode_low: float,
     clip_ratio_dual: float,
     thinkless_alpha: float,
-    focal_rho: float = -1.0,
-    positive_smooth_alpha: float = -1.0,
-    negation_penalty: float = -1.0,
+    focal_rho: float = -1.0
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Compute the policy loss.
 
@@ -726,31 +916,31 @@ def compute_policy_loss(
             a float number indicating the mean KL divergence between the old policy and the new policy
 
     """
-    if focal_rho >= 0:
-        with torch.no_grad(): # 确保这部分计算不产生梯度
-            # 1. 获取第一个token (模式控制token) 的新策略概率 π_θ
-            # log_probs的形状是 (bs, response_length)
-            mode_log_prob = log_probs[:, 0]
-            mode_prob = torch.exp(mode_log_prob)
+    # if focal_rho >= 0:
+    #     with torch.no_grad(): # 确保这部分计算不产生梯度
+    #         # 1. 获取第一个token (模式控制token) 的新策略概率 π_θ
+    #         # log_probs的形状是 (bs, response_length)
+    #         mode_log_prob = log_probs[:, 0]
+    #         mode_prob = torch.exp(mode_log_prob)
 
-            # 2. 计算Focal Loss调制因子 (1 - π_θ)^ρ
-            # 为了数值稳定性，在π_θ接近1时进行clamp
-            focal_factor_pos = torch.pow(1 - mode_prob.clamp(max=1-1e-7), focal_rho)
-            focal_factor_neg = torch.pow(mode_prob.clamp(min=1e-7), focal_rho)
+    #         # 2. 计算Focal Loss调制因子 (1 - π_θ)^ρ
+    #         # 为了数值稳定性，在π_θ接近1时进行clamp
+    #         focal_factor_pos = torch.pow(1 - mode_prob.clamp(max=1-1e-7), focal_rho)
+    #         focal_factor_neg = torch.pow(mode_prob.clamp(min=1e-7), focal_rho)
             
-            # 增加一个维度以匹配advantages的形状
-            focal_factor = focal_factor.unsqueeze(1) # shape: (bs, 1)
+    #         # 增加一个维度以匹配advantages的形状
+    #         focal_factor = focal_factor.unsqueeze(1) # shape: (bs, 1)
 
-        # 3. 创建一个新的advantages张量，只调制第一个token的优势
-        # 我们复制advantages以避免原地修改可能带来的副作用
-        original_advantages = advantages
-        modulated_advantages = torch.clone(original_advantages)
+    #     # 3. 创建一个新的advantages张量，只调制第一个token的优势
+    #     # 我们复制advantages以避免原地修改可能带来的副作用
+    #     original_advantages = advantages
+    #     modulated_advantages = torch.clone(original_advantages)
         
-        # 只修改第一个token (t=0) 的优势
-        modulated_advantages[:, 0] = modulated_advantages[:, 0] * focal_factor[:, 0]
+    #     # 只修改第一个token (t=0) 的优势
+    #     modulated_advantages[:, 0] = modulated_advantages[:, 0] * focal_factor[:, 0]
         
-        # 将advantages替换为被调制过的版本
-        advantages = modulated_advantages
+    #     # 将advantages替换为被调制过的版本
+    #     advantages = modulated_advantages
 
     negative_approx_kl = log_probs - old_log_probs
     # clamp the ratio before exp to avoid nan

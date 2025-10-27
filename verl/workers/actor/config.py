@@ -100,6 +100,11 @@ class ActorConfig:
     kl_nothink_to_think_weight: float = 1.0  # Weight for KL(no-think || think)
     tool_call_token_id: int = 151657
     mode_kl_coef: float = 1.0
+    # SIMKO-related configurations
+    simko: bool = False  # Enable SIMKO (Smoothed Importance-weighted Multi-token Knowledge Optimization)
+    top_k: int = 5  # Number of top-K tokens to consider for SIMKO
+    mix_topk_coef: float = 0.01  # Mixing coefficient for top-K tokens
+    tau: float = 0.8 # Entropy quantile threshold for determining high-entropy positions
     model: ModelConfig = field(default_factory=ModelConfig)
     optim: OptimConfig = field(default_factory=OptimConfig)
     fsdp: FSDPConfig = field(default_factory=FSDPConfig)

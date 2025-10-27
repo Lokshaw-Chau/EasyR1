@@ -37,6 +37,7 @@ from ...utils.ulysses import (
     ulysses_pad_and_slice_inputs,
     get_ulysses_sequence_parallel_group,
     get_ulysses_sequence_parallel_world_size,
+    get_ulysses_sequence_parallel_rank,
 )
 from .base import BasePPOActor
 from .config import ActorConfig
@@ -73,12 +74,16 @@ class DataParallelPPOActor(BasePPOActor):
             self.log_probs_from_logits = VF.log_probs_from_logits
             self.entropy_from_logits = entropy_from_logits
 
-        self.calculate_entropy = (self.config.entropy_bonus_alpha > 0)
-    def _forward_micro_batch(self, micro_batch: Dict[str, torch.Tensor], temperature: float) -> torch.Tensor:
+        self.calculate_entropy = False
+    def _forward_micro_batch(
+        self, micro_batch: Dict[str, torch.Tensor], temperature: float, simko: bool = False, top_k: int = 5
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
         """
         Returns:
-            mode_entropy: # (bs, 1)
+            entropy: # (bs, response_len) or None
             log_probs: # (bs, response_len)
+            max_token: # (bs, response_len) - if simko=True, else None
+            topk_log_probs: # (bs, response_len, top_k) - if simko=True, else None
         """
         input_ids = micro_batch["input_ids"]
         batch_size, seqlen = input_ids.shape
@@ -86,7 +91,9 @@ class DataParallelPPOActor(BasePPOActor):
         position_ids = micro_batch["position_ids"]
         responses = micro_batch["responses"]
         response_length = responses.size(-1)
-        mode_entropy = None
+        entropy = None
+        max_token = None
+        topk_log_probs = None
         if position_ids.dim() == 3:  # qwen2vl mrope
             position_ids = position_ids.transpose(0, 1)  # (bsz, 3, seqlen) -> (3, bsz, seqlen)
 
@@ -98,9 +105,19 @@ class DataParallelPPOActor(BasePPOActor):
                 )
 
         if self.config.padding_free:
-            input_ids_rmpad, indices, *_ = unpad_input(
+            result = unpad_input(
                 input_ids.unsqueeze(-1), attention_mask
             )  # input_ids_rmpad (total_nnz, ...)
+            if len(result) == 3:
+                input_ids_rmpad, indices, cu_seqlens = result
+                max_seqlen = None
+            elif len(result) == 4:
+                input_ids_rmpad, indices, cu_seqlens, max_seqlen = result
+            else:
+                input_ids_rmpad, indices, cu_seqlens, *_ = result
+                # raise ValueError(f"Unexpected number of return values: {len(result)}")
+
+            cu_seqlens = cu_seqlens.to(dtype=torch.long, device=input_ids.device)
             input_ids_rmpad = input_ids_rmpad.transpose(0, 1)  # (1, total_nnz)
 
             # unpad the position_ids to align the rotary
@@ -141,13 +158,48 @@ class DataParallelPPOActor(BasePPOActor):
             logits_rmpad.div_(temperature)
             # ((total_nnz / sp) + pad)
             inplace_backward = True
-            if self.calculate_entropy:
+            if self.calculate_entropy or simko:
                 inplace_backward = False
             log_probs = self.log_probs_from_logits(logits=logits_rmpad, labels=input_ids_rmpad_rolled, inplace_backward=inplace_backward)
-            
+
+            # Compute max_token and topk_log_probs for SIMKO
+            if simko:
+                # Compute max_token (whether predicted token matches actual token)
+                predicted_tokens_rmpad = torch.argmax(logits_rmpad, dim=-1)  # (chunk_len,)
+                max_token_rmpad = (predicted_tokens_rmpad == input_ids_rmpad_rolled).float()  # (chunk_len,)
+
+                topk_logp_rmpad = None
+                if top_k > 0:
+                    # Map first response logits to current shard to avoid materializing full vocab tensors
+                    chunk_len = logits_rmpad.size(0)
+                    if self.config.ulysses_sequence_parallel_size > 1:
+                        sp_rank = get_ulysses_sequence_parallel_rank()
+                    else:
+                        sp_rank = 0
+                    start_offset = sp_rank * chunk_len
+
+                    cu_seqlens_device = cu_seqlens.to(device=logits_rmpad.device)
+                    non_pad_lengths = cu_seqlens_device[1:] - cu_seqlens_device[:-1]
+                    response_token_counts = attention_mask[:, -response_length:].sum(dim=1).to(dtype=torch.long)
+                    first_token_offsets = non_pad_lengths - response_token_counts - 1
+                    first_token_offsets = torch.clamp(first_token_offsets, min=0)
+                    first_token_indices = cu_seqlens_device[:-1] + first_token_offsets
+
+                    local_positions = first_token_indices - start_offset
+                    valid_mask = (local_positions >= 0) & (local_positions < chunk_len)
+
+                    topk_logp_rmpad = logits_rmpad.new_zeros((chunk_len, top_k))
+                    if valid_mask.any():
+                        valid_local_positions = local_positions[valid_mask].to(torch.long)
+                        selected_logits = logits_rmpad[valid_local_positions]
+                        topk_values, _ = torch.topk(selected_logits, k=top_k, dim=-1)
+                        log_sum_exp = torch.logsumexp(selected_logits, dim=-1, keepdim=True)
+                        topk_log_probs_valid = topk_values - log_sum_exp
+                        topk_logp_rmpad.index_copy_(0, valid_local_positions, topk_log_probs_valid)
+
             if self.calculate_entropy:
                 # compute the mode entropy (entropy of the first token)
-                
+
                 entropy_rmpad = torch.utils.checkpoint.checkpoint(
                     self.entropy_from_logits, logits_rmpad
                 )
@@ -160,17 +212,38 @@ class DataParallelPPOActor(BasePPOActor):
                     entropy_rmpad = gather_outputs_and_unpad(
                         entropy_rmpad, gather_dim=0, unpad_dim=0, padding_size=pad_size
                     )
+                if simko:
+                    max_token_rmpad = gather_outputs_and_unpad(
+                        max_token_rmpad, gather_dim=0, unpad_dim=0, padding_size=pad_size
+                    )
+                    if top_k > 0 and topk_logp_rmpad is not None:
+                        topk_logp_rmpad = gather_outputs_and_unpad(
+                            topk_logp_rmpad, gather_dim=0, unpad_dim=0, padding_size=pad_size
+                        )
             if self.calculate_entropy:
                 full_entropy = pad_input(
                     hidden_states=entropy_rmpad.unsqueeze(-1), indices=indices, batch=batch_size, seqlen=seqlen
                 )
-                mode_entropy = full_entropy.squeeze(-1)[:, -response_length - 1]  # (bsz, 1)
+                entropy = full_entropy.squeeze(-1)[:, -response_length - 1:-1]  # (bsz, 1)
 
             # pad back to (bsz, seqlen)
             full_log_probs = pad_input(
                 hidden_states=log_probs.unsqueeze(-1), indices=indices, batch=batch_size, seqlen=seqlen
             )
             log_probs = full_log_probs.squeeze(-1)[:, -response_length - 1 : -1]  # (bsz, response_length)
+
+            # Pad SIMKO tensors
+            if simko:
+                full_max_token = pad_input(
+                    hidden_states=max_token_rmpad.unsqueeze(-1), indices=indices, batch=batch_size, seqlen=seqlen
+                )
+                max_token = full_max_token.squeeze(-1)[:, -response_length - 1 : -1]  # (bsz, response_length)
+
+                if top_k > 0 and topk_logp_rmpad is not None:
+                    full_topk_logp = pad_input(
+                        hidden_states=topk_logp_rmpad, indices=indices, batch=batch_size, seqlen=seqlen
+                    )
+                    topk_log_probs = full_topk_logp[:, -response_length - 1 : -1, :]  # (bsz, response_length, K)
         else:
             output = self.actor_module(
                 input_ids=input_ids,
@@ -183,11 +256,33 @@ class DataParallelPPOActor(BasePPOActor):
             logits.div_(temperature)
             logits = logits[:, -response_length - 1 : -1, :]  # (bsz, response_length, vocab_size)
             log_probs = self.log_probs_from_logits(logits, responses)  # (bsz, response_length)
+
+            entropy = None
             if self.calculate_entropy:
-                entropy = torch.utils.checkpoint.checkpoint(self.entropy_from_logits, logits)
-                mode_entropy = entropy[:,0]
-        
-        return mode_entropy, log_probs
+                entropy = VF.entropy_from_logits(logits)
+
+            # Compute max_token and topk_log_probs for SIMKO
+            if simko:
+                # Compute max_token (whether predicted token matches actual token)
+                predicted_tokens = torch.argmax(logits, dim=-1)  # (bsz, response_length)
+                max_token = (predicted_tokens == responses).float()  # (bsz, response_length)
+
+                # Compute top-K log probabilities ONLY for the first token (memory optimization)
+                if top_k > 0:
+                    B, T, V = logits.shape
+                    # Only compute top-k for the first token to save memory
+                    first_token_logits = logits[:, 0, :]  # (B, V)
+                    topk_values, topk_idx = torch.topk(first_token_logits, k=top_k, dim=-1)  # (B, K)
+
+                    # Compute log_softmax for top-k tokens
+                    log_sum_exp = torch.logsumexp(first_token_logits, dim=-1, keepdim=True)  # (B, 1)
+                    first_topk_logp = topk_values - log_sum_exp  # (B, K)
+
+                    # Create full tensor with zeros for other positions
+                    topk_log_probs = torch.zeros(B, T, top_k, device=logits.device, dtype=logits.dtype)
+                    topk_log_probs[:, 0, :] = first_topk_logp  # Only fill first token
+
+        return entropy, log_probs, max_token, topk_log_probs
 
     def _optimizer_step(self) -> torch.Tensor:
         if isinstance(self.actor_module, FSDP):
@@ -235,22 +330,46 @@ class DataParallelPPOActor(BasePPOActor):
             self.config.micro_batch_size_per_device_for_experience
         )
         log_probs_lst = []
-        mode_entropy_lst = []
+        entropy_lst = []
+        max_token_lst = []
+        topk_log_probs_lst = []
+
+        # Check if SIMKO is enabled
+        simko = self.config.simko
+        top_k = self.config.top_k if simko else 0
+
         if self.rank == 0:
             micro_batches = tqdm(micro_batches, desc="Compute log probs", position=2)
 
         for micro_batch in micro_batches:
             model_inputs = {**micro_batch.batch, **micro_batch.non_tensor_batch}
-            mode_entropy, log_probs = self._forward_micro_batch(model_inputs, temperature=temperature)
+            entropy, log_probs, max_token, topk_log_probs = self._forward_micro_batch(
+                model_inputs, temperature=temperature, simko=simko, top_k=top_k
+            )
             log_probs_lst.append(log_probs)
             if self.calculate_entropy:
-                mode_entropy_lst.append(mode_entropy)
-        
+                entropy_lst.append(entropy)
+            if simko:
+                max_token_lst.append(max_token)
+                if top_k > 0:
+                    topk_log_probs_lst.append(topk_log_probs)
+
         log_probs = torch.concat(log_probs_lst, dim=0)
-        mode_entropys = None
+        entropys = None
+        max_tokens = None
+        topk_log_probs_out = None
+
         if self.calculate_entropy:
-            mode_entropys = torch.concat(mode_entropy_lst, dim=0)
-        return log_probs, mode_entropys
+            entropys = torch.concat(entropy_lst, dim=0)
+
+        if simko:
+            max_tokens = torch.concat(max_token_lst, dim=0)
+            if top_k > 0:
+                topk_log_probs_out = torch.concat(topk_log_probs_lst, dim=0)
+
+        # Return tuple: (log_probs, entropys, max_tokens, topk_log_probs)
+        # For backward compatibility, components can be None if not computed
+        return log_probs, entropys, max_tokens, topk_log_probs_out
 
     def update_policy(self, data: DataProto) -> Dict[str, Any]:
         self.actor_module.train()
@@ -264,6 +383,10 @@ class DataParallelPPOActor(BasePPOActor):
 
         if self.config.enable_kl_no_think:
             select_keys.extend(["fake_input_ids", "fake_attention_mask", "fake_position_ids", "fake_responses"])
+
+        # Add SIMKO-specific keys
+        if self.config.simko:
+            select_keys.extend(["old_log_probs_topk", "token_level_scores"])
 
         if "multi_modal_inputs" in data.non_tensor_batch.keys():
             non_tensor_select_keys = ["multi_modal_inputs"]
@@ -304,7 +427,9 @@ class DataParallelPPOActor(BasePPOActor):
                     enforce_nothinking = model_inputs['enforce_nothinking']
 
                     # all return: (bsz, response_length)
-                    mode_entropy, log_probs = self._forward_micro_batch(model_inputs, temperature=temperature)
+                    entropy, log_probs, max_token, topk_log_probs = self._forward_micro_batch(
+                        model_inputs, temperature=temperature, simko=self.config.simko, top_k=self.config.top_k
+                    )
                     force_think_resp_entropy = -VF.masked_mean(
                         log_probs[~enforce_nothinking, 1:], response_mask[~enforce_nothinking, 1:]
                     )
@@ -320,19 +445,42 @@ class DataParallelPPOActor(BasePPOActor):
                     focal_rho = self.config.focal_rho * (1 - training_process)
                     entropy_bonus = self.config.entropy_bonus_alpha * (1 - training_process)
 
-                    pg_loss, pg_clipfrac_higher, pg_clipfrac_lower, ppo_kl, cond_loss, resp_loss = core_algos.compute_policy_loss(
-                        old_log_probs=old_log_probs,
-                        log_probs=log_probs,
-                        advantages=advantages,
-                        response_mask=response_mask,
-                        clip_ratio_low=self.config.clip_ratio_low,
-                        clip_ratio_high=self.config.clip_ratio_high,
-                        clip_ratio_mode_high=self.config.clip_ratio_high, #+scaling_factor,
-                        clip_ratio_mode_low=self.config.clip_ratio_low,# +scaling_factor,
-                        clip_ratio_dual=self.config.clip_ratio_dual,
-                        thinkless_alpha= self.config.think_alpha,
-                        focal_rho=focal_rho,
-                    )
+                    # Use SIMKO policy loss if enabled, otherwise use standard policy loss
+                    if self.config.simko:
+                        old_log_probs_topk = model_inputs["old_log_probs_topk"]
+                        token_level_scores = model_inputs["token_level_scores"]
+                        entropy = entropy.detach()
+
+                        pg_loss, pg_clipfrac_higher, ppo_kl, cond_loss, resp_loss, simko_metrics = core_algos.compute_policy_loss_simko(
+                            old_log_prob=old_log_probs,
+                            old_log_probs_topk=old_log_probs_topk,
+                            log_prob=log_probs,
+                            topk_log_probs=topk_log_probs,
+                            entropy=entropy,
+                            advantages=advantages,
+                            eos_mask=response_mask,
+                            cliprange=self.config.clip_ratio_low,
+                            token_level_scores=token_level_scores,
+                            max_token=max_token,
+                            mix_topk_coef=self.config.mix_topk_coef,
+                            tau=self.config.tau,
+                        )
+                        # SIMKO doesn't return separate clipfrac metrics, so we duplicate
+                        pg_clipfrac_lower = [torch.tensor(0.0), torch.tensor(0.0)]
+                    else:
+                        pg_loss, pg_clipfrac_higher, pg_clipfrac_lower, ppo_kl, cond_loss, resp_loss = core_algos.compute_policy_loss(
+                            old_log_probs=old_log_probs,
+                            log_probs=log_probs,
+                            advantages=advantages,
+                            response_mask=response_mask,
+                            clip_ratio_low=self.config.clip_ratio_low,
+                            clip_ratio_high=self.config.clip_ratio_high,
+                            clip_ratio_mode_high=self.config.clip_ratio_high, #+scaling_factor,
+                            clip_ratio_mode_low=self.config.clip_ratio_low,# +scaling_factor,
+                            clip_ratio_dual=self.config.clip_ratio_dual,
+                            thinkless_alpha= self.config.think_alpha,
+                            focal_rho=focal_rho,
+                        )
 
                     if "ref_log_probs" in model_inputs:
                         ref_log_probs = model_inputs["ref_log_probs"]
@@ -373,7 +521,7 @@ class DataParallelPPOActor(BasePPOActor):
                         if "multi_modal_inputs" in model_inputs:
                             fake_batch["multi_modal_inputs"] = model_inputs["multi_modal_inputs"]
                         with torch.no_grad():
-                            _, fake_log_probs = self._forward_micro_batch(fake_batch, temperature=temperature)
+                            _, fake_log_probs, _, _ = self._forward_micro_batch(fake_batch, temperature=temperature)
 
                         # Map existing think log_probs (computed above on original responses)
                         # to align with fake_responses tokens, avoiding an extra forward.
@@ -442,9 +590,9 @@ class DataParallelPPOActor(BasePPOActor):
                             "actor/tnt_mutual_kl": tnt_mutual_kl.detach().item(),
                         })
 
-                    if self.calculate_entropy:
-                        pg_loss = pg_loss - mode_entropy.mean() * self.config.entropy_bonus_alpha
-                        metrics["actor/mode_entropy"] = mode_entropy.mean().detach().item()
+                    # if self.calculate_entropy:
+                    #     pg_loss = pg_loss - mode_entropy.mean() * self.config.entropy_bonus_alpha
+                    #     metrics["actor/mode_entropy"] = mode_entropy.mean().detach().item()
                     
                     loss = pg_loss / gradient_accumulation
                     loss.backward()
@@ -463,7 +611,16 @@ class DataParallelPPOActor(BasePPOActor):
                         "actor/ppo_kl": ppo_kl.detach().item(),
                         "actor/cond_loss": cond_loss.mean().detach().item(),
                         "actor/clip_ratio_mode_high": self.config.clip_ratio_high,# +scaling_factor,
+                        "advantage/sum_of_absolute": advantages.abs().sum().detach().item(),
+                        "advantage/think_advantage_sum": advantages[~enforce_nothinking].sum().detach().item(),
+                        "advantage/nothink_advantage_sum": advantages[enforce_nothinking].sum().detach().item(),
                     }
+
+                    # Add SIMKO-specific metrics if available
+                    if self.config.simko and 'simko_metrics' in locals():
+                        for key, value in simko_metrics.items():
+                            batch_metrics[f"actor/simko_{key}"] = value.detach().item()
+
                     if kl_no_think_metrics:
                         batch_metrics.update(kl_no_think_metrics)
                     # Add conditional checks for non-empty tensors

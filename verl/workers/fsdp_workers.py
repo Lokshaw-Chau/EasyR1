@@ -517,10 +517,15 @@ class FSDPWorker(Worker):
         # perform recompute log_prob
         with self.ulysses_sharding_manager:
             data = self.ulysses_sharding_manager.preprocess_data(data)
-            output, entropys = self.actor.compute_log_prob(data=data)
-            tensors_dict = {"old_log_probs": output}
+            log_probs, entropys, max_tokens, topk_log_probs = self.actor.compute_log_prob(data=data)
+            tensors_dict = {"old_log_probs": log_probs}
             if entropys is not None:
                 tensors_dict["entropys"] = entropys
+            # Add SIMKO-specific outputs if available
+            if max_tokens is not None:
+                tensors_dict["max_tokens"] = max_tokens
+            if topk_log_probs is not None:
+                tensors_dict["old_log_probs_topk"] = topk_log_probs
             output = DataProto.from_dict(
                 tensors=tensors_dict, meta_info={"temperature": self.config.rollout.temperature}
             )
@@ -547,7 +552,7 @@ class FSDPWorker(Worker):
         data.meta_info["temperature"] = self.config.rollout.temperature
         with self.ulysses_sharding_manager:
             data = self.ulysses_sharding_manager.preprocess_data(data)
-            log_probs, mode_entropys = self.ref_policy.compute_log_prob(data=data)
+            log_probs, mode_entropys, max_tokens, topk_log_probs = self.ref_policy.compute_log_prob(data=data)
             output = DataProto.from_dict(tensors={"ref_log_probs": log_probs})
             output = self.ulysses_sharding_manager.postprocess_data(output)
 
