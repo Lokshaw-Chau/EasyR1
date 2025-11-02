@@ -115,6 +115,7 @@ class ActorConfig:
     use_kl_loss: bool = field(default=False, init=False)
     kl_penalty: str = field(default="kl", init=False)
     kl_coef: float = field(default=0.0, init=False)
+    think_filtering: bool = field(default=False, init=False)
 
 
 @dataclass

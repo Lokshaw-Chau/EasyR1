@@ -49,6 +49,9 @@ class FSDPVLLMShardingManager(BaseShardingManager):
         # https://github.com/vllm-project/vllm/pull/11743#issuecomment-2754338119
         self.freed_bytes = 0
 
+        # Track vllm loading state for manual control
+        self._vllm_loaded = False
+
         # Note that torch_random_states may be different on each dp rank
         self.torch_random_states = torch.cuda.get_rng_state()
         # get a random rng states
@@ -64,6 +67,10 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             yield name, tensor.full_tensor() if self.world_size != 1 else tensor
 
     def __enter__(self):
+        # Skip if vllm is already loaded (manual control mode)
+        if self._vllm_loaded:
+            return
+
         # NOTE: Basically, we only need `torch.cuda.empty_cache()` before vllm wake_up and
         # after vllm sleep, since vllm has its own caching memory allocator CuMemAllocator.
         # Out of vllm scope, we should avoid empty cache to let pytorch using caching memory
@@ -98,6 +105,10 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             torch.cuda.set_rng_state(self.gen_random_states)
 
     def __exit__(self, exc_type, exc_value, traceback):
+        # Skip if vllm is manually loaded (will be released manually)
+        if self._vllm_loaded:
+            return
+
         print_gpu_memory_usage("Before vllm offload in sharding manager")
         free_bytes_before_sleep = torch.cuda.mem_get_info()[0]
         self.inference_engine.sleep(level=1)
@@ -124,3 +135,63 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             data = data.chunk(chunks=self.tp_size)[self.tp_rank]
 
         return data
+
+    def load_vllm_and_sync_weights(self):
+        """Manually load vllm and sync weights (equivalent to __enter__)"""
+        if self._vllm_loaded:
+            print("VLLM already loaded, skipping...")
+            return
+
+        torch.cuda.empty_cache()
+        print_gpu_memory_usage("Before state_dict() in manual load")
+        actor_weights = get_model_state_dict(self.module)
+        print_gpu_memory_usage("After state_dict() in manual load")
+
+        if "tags" in inspect.signature(self.inference_engine.wake_up).parameters:
+            self.inference_engine.wake_up(tags=["weights"])
+        else:
+            self.inference_engine.wake_up()
+
+        model = self.inference_engine.llm_engine.model_executor.driver_worker.worker.model_runner.model
+        model.load_weights(self._make_weight_iterator(actor_weights))
+        print_gpu_memory_usage("After sync model weights in manual load")
+
+        del actor_weights
+        torch.cuda.empty_cache()
+
+        if "tags" in inspect.signature(self.inference_engine.wake_up).parameters:
+            self.inference_engine.wake_up(tags=["kv_cache"])
+
+        print_gpu_memory_usage("After del state_dict and empty_cache in manual load")
+
+        # Set random states
+        if self.device_mesh is not None:
+            self.torch_random_states = torch.cuda.get_rng_state()
+            torch.cuda.set_rng_state(self.gen_random_states)
+
+        # Mark as loaded
+        self._vllm_loaded = True
+
+    def offload_vllm(self):
+        """Manually offload vllm (equivalent to __exit__)"""
+        if not self._vllm_loaded:
+            print("VLLM not loaded, skipping offload...")
+            return
+
+        print_gpu_memory_usage("Before vllm offload in manual offload")
+        free_bytes_before_sleep = torch.cuda.mem_get_info()[0]
+        self.inference_engine.sleep(level=1)
+        free_bytes_after_sleep = torch.cuda.mem_get_info()[0]
+        self.freed_bytes = free_bytes_after_sleep - free_bytes_before_sleep
+        print_gpu_memory_usage("After vllm offload in manual offload")
+
+        self.module.train()
+        torch.cuda.empty_cache()
+
+        # Restore random states
+        if self.device_mesh is not None:
+            self.gen_random_states = torch.cuda.get_rng_state()
+            torch.cuda.set_rng_state(self.torch_random_states)
+
+        # Mark as unloaded
+        self._vllm_loaded = False

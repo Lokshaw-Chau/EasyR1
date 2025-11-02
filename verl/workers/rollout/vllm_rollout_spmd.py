@@ -166,12 +166,12 @@ class vLLMRollout(BaseRollout):
                 rollout_prob = [1.0 / self.sampling_params.n] * len(response_ids)
 
             else:
-                if self.rollout_intervention == 'schedule':
-                    self.intervention_no_think_n = intervention_nothink_n
-                    self.intervention_think_n = intervention_think_n
-                elif self.rollout_intervention == 'force':
-                    self.intervention_no_think_n = self.config.intervention_no_think_n
-                    self.intervention_think_n = self.config.intervention_think_n
+                # if self.rollout_intervention == 'schedule':
+                self.intervention_no_think_n = intervention_nothink_n
+                self.intervention_think_n = intervention_think_n
+                # elif self.rollout_intervention == 'force':
+                #     self.intervention_no_think_n = self.config.intervention_no_think_n
+                #     self.intervention_think_n = self.config.intervention_think_n
                 print("Using rollout intervention with intervention_nothink_n:", self.intervention_no_think_n, "and intervention_think_n:", self.intervention_think_n)
 
                 if self.intervention_no_think_n + self.intervention_think_n > self.sampling_params.n:

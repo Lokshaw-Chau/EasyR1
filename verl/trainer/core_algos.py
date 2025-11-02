@@ -904,6 +904,8 @@ def compute_policy_loss(
             The higher clip range used in DAPO. See https://arxiv.org/pdf/2503.14476
         clip_ratio_dual: (float)
             The dual clip range used in Dual-clip PPO. See https://arxiv.org/pdf/1912.09729
+        think_filtering: (bool)
+            Whether to set first token advantage to 1.0
 
     Returns:
         pg_loss: `a scalar torch.Tensor`

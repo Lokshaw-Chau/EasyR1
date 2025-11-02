@@ -187,12 +187,64 @@ class DataProto:
         else:
             return 0
 
-    def __getitem__(self, item: Union[int, slice]) -> Union["DataProto", "DataProtoItem"]:
-        tensor_data = self.batch[item]
-        non_tensor_data = {key: value[item] for key, value in self.non_tensor_batch.items()}
-        return_type = DataProto if isinstance(item, slice) else DataProtoItem
-        return return_type(batch=tensor_data, non_tensor_batch=non_tensor_data, meta_info=self.meta_info)
+    # def __getitem__(self, item: Union[int, slice]) -> Union["DataProto", "DataProtoItem"]:
+    #     tensor_data = self.batch[item]
+    #     non_tensor_data = {key: value[item] for key, value in self.non_tensor_batch.items()}
+    #     return_type = DataProto if isinstance(item, slice) else DataProtoItem
+    #     return return_type(batch=tensor_data, non_tensor_batch=non_tensor_data, meta_info=self.meta_info)
 
+    def index_select(self, index: Union[list[int], NDArray, torch.Tensor]) -> "DataProto":
+        """Select a subset of the DataProto via index.
+
+        Args:
+            index (list, ndarray, torch.Tensor): a list of indices to select.
+
+        Returns:
+            DataProto: the DataProto containing the selected indices.
+        """
+        if isinstance(index, list):
+            index = np.array(index, dtype=bool if isinstance(index[0], bool) else np.int32)
+        elif isinstance(index, torch.Tensor):
+            index = index.detach().cpu().numpy()
+
+        tensor_data = self.batch[index] if self.batch is not None else None
+        non_tensor_data = {key: value[index] for key, value in self.non_tensor_batch.items()}
+        return DataProto(batch=tensor_data, non_tensor_batch=non_tensor_data, meta_info=self.meta_info)
+
+    def slice_select(
+        self, start: Optional[int] = None, end: Optional[int] = None, step: Optional[int] = None
+    ) -> "DataProto":
+        """Select a subset of the DataProto via slice.
+
+        Args:
+            start (int, optional): the start index of the slice.
+            end (int, optional): the end index of the slice.
+            step (int, optional): the step of the slice.
+
+        Returns:
+            DataProto: the DataProto containing the selected slice.
+        """
+        index = slice(start, end, step)
+        tensor_data = self.batch[index] if self.batch is not None else None
+        non_tensor_data = {key: value[index] for key, value in self.non_tensor_batch.items()}
+        return DataProto(batch=tensor_data, non_tensor_batch=non_tensor_data, meta_info=self.meta_info)
+
+    def __getitem__(
+        self, item: Union[int, slice, list[int], np.ndarray, torch.Tensor]
+    ) -> Union["DataProto", "DataProtoItem"]:
+        if isinstance(item, slice):
+            return self.slice_select(item.start, item.stop, item.step)
+
+        if isinstance(item, (list, np.ndarray, torch.Tensor)):
+            return self.index_select(item)
+
+        if isinstance(item, (int, np.integer)):
+            tensor_data = self.batch[item] if self.batch is not None else None
+            non_tensor_data = {key: value[item] for key, value in self.non_tensor_batch.items()}
+            return DataProtoItem(batch=tensor_data, non_tensor_batch=non_tensor_data, meta_info=self.meta_info)
+
+        raise TypeError(f"Indexing with {type(item)} is not supported.")
+    
     def __getstate__(self) -> Tuple[bytes, Dict[str, NDArray], Dict[str, Any]]:
         buffer = io.BytesIO()
         if self.batch is not None:

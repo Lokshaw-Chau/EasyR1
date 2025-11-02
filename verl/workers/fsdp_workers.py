@@ -126,7 +126,15 @@ class FSDPWorker(Worker):
             return
 
         if self.config.rollout.n > 1:
-            config.global_batch_size *= self.config.rollout.n
+            # When think_filtering is enabled, only half of rollouts are kept
+            effective_n = self.config.rollout.n
+            if hasattr(config, 'think_filtering') and config.think_filtering:
+                effective_n = effective_n // 2
+                if effective_n == 0:
+                    effective_n = 1
+                self.print_rank0(f"{role} using effective_n={effective_n} (think_filtering enabled, original n={self.config.rollout.n})")
+
+            config.global_batch_size *= effective_n
             self.print_rank0(f"{role} will use global batch size {config.global_batch_size}.")
 
         config.global_batch_size_per_device = (
@@ -504,6 +512,24 @@ class FSDPWorker(Worker):
 
         output = output.to("cpu")
         return output
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def prepare_rollout_engine(self):
+        """Prepare and load the rollout engine for batch generation"""
+        assert hasattr(self, "rollout_sharding_manager"), "rollout_sharding_manager not initialized"
+        self.rollout_sharding_manager.load_vllm_and_sync_weights()
+
+        # Offload actor model if needed
+        if self._use_param_offload:
+            offload_fsdp_model(self.fsdp_module)
+        if self._use_optimizer_offload:
+            offload_fsdp_optimizer(optimizer=self.optimizer)
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def release_rollout_engine(self):
+        """Release and offload the rollout engine after batch generation"""
+        assert hasattr(self, "rollout_sharding_manager"), "rollout_sharding_manager not initialized"
+        self.rollout_sharding_manager.offload_vllm()
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def compute_log_probs(self, data: DataProto):

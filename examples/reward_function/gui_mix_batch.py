@@ -157,17 +157,17 @@ def r1gui_format_reward(predict_str: str, ground_truth: str) -> float:
             return 0.0
         if ui_type == "android_control":
             if pred_action not in ['click', 'long_press', 'swipe', 'type', 'system_button', 'open', 'wait']:
-                print(f"Invalid action: {pred_action} for ui_type: {ui_type}")
+                # print(f"Invalid action: {pred_action} for ui_type: {ui_type}")
                 return 0.0
         
         if ui_type == "gui_odyssey":
             if pred_action not in ['click', 'long_press', 'swipe', 'type', 'system_button', 'terminate']:
-                print(f"Invalid action: {pred_action} for ui_type: {ui_type}")
+                # print(f"Invalid action: {pred_action} for ui_type: {ui_type}")
                 return 0.0
 
         if ui_type == "agentnetbench":
             if pred_action not in ['key', 'type', 'mouse_move', 'left_click', 'right_click', 'double_click', 'scroll', 'terminate', 'left_click_drag']:
-                print(f"Invalid action: {pred_action} for ui_type: {ui_type}")
+                # print(f"Invalid action: {pred_action} for ui_type: {ui_type}")
                 return 0.0
 
         if pred_action in ['click', 'long_press', 'mouse_move', 'left_click', 'right_click', 'double_click', 'left_click_drag']:
@@ -342,17 +342,22 @@ def think_ratio(predict_strs: list[str]):
 def _pass_at_accracy_for_each_query(scores, ground_truths):
     gt2think_acc = {}
     gt2nothink_acc = {}
+    gt2acc = {}
     for i, score in enumerate(scores):
         ground_truth = ground_truths[i]
         if ground_truth not in gt2think_acc:
             gt2think_acc[ground_truth] = []
             gt2nothink_acc[ground_truth] = []
+            gt2acc[ground_truth] = []
         gt2think_acc[ground_truth].append(score["think_acc"])
         gt2nothink_acc[ground_truth].append(score["no_think_acc"])
+        gt2acc[ground_truth].append(score["accuracy"])
     
     for i, score in enumerate(scores):
         think_acc = max(gt2think_acc[ground_truths[i]])
         no_think_acc = max(gt2nothink_acc[ground_truths[i]])
+        total_acc = max(gt2acc[ground_truths[i]])
+        score["pass_at_accuracy"] = total_acc
         if score["think_ratio"] > 0.5:
             score["think_pass_at_accuracy"] = think_acc
             score["nothink_pass_at_accuracy"] = 0.0

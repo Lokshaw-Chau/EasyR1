@@ -37,3 +37,4 @@ class CriticConfig:
     offload: OffloadConfig = field(default_factory=OffloadConfig)
     """auto keys"""
     global_batch_size_per_device: int = field(default=-1, init=False)
+    think_filtering: bool = field(default=False, init=False)

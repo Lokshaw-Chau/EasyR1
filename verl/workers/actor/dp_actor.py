@@ -468,6 +468,15 @@ class DataParallelPPOActor(BasePPOActor):
                         # SIMKO doesn't return separate clipfrac metrics, so we duplicate
                         pg_clipfrac_lower = [torch.tensor(0.0), torch.tensor(0.0)]
                     else:
+                        # When think_filtering is enabled, set first token advantage to 1.0
+                        if self.config.think_filtering:
+                            advantages = advantages.clone()
+                            advantages[~enforce_nothinking, 0] = 0.1  # think样本：大的正advantage
+                            advantages[~enforce_nothinking, 1:] *= 3.0
+                            advantages[enforce_nothinking, 0] = 0.1  # no-think样本：小的advantage
+                            # set old_log_probs first token to 0
+                            old_log_probs[:, 0] = torch.zeros_like(old_log_probs[:, 0])
+                        
                         pg_loss, pg_clipfrac_higher, pg_clipfrac_lower, ppo_kl, cond_loss, resp_loss = core_algos.compute_policy_loss(
                             old_log_probs=old_log_probs,
                             log_probs=log_probs,

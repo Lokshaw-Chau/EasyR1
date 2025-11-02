@@ -76,6 +76,12 @@ class AlgorithmConfig:
     kl_target: float = 0.0
     think_alpha: float = 0.0
     old_rollout_probs: bool = False
+    # filtering configs
+    online_filtering: bool = False
+    think_filtering: bool = False
+    filter_key: str = "accuracy"
+    filter_low: float = 0.1
+    filter_high: float = 0.99
 
 
 @dataclass
@@ -96,6 +102,7 @@ class TrainerConfig:
     save_limit: int = -1
     save_checkpoint_path: Optional[str] = None
     load_checkpoint_path: Optional[str] = None
+    max_try_make_batch: int = 10
 
     def post_init(self):
         if self.save_checkpoint_path is None:
@@ -126,6 +133,8 @@ class PPOConfig:
         self.worker.actor.sigmoid_k = self.algorithm.sigmoid_k
         self.worker.actor.sigmoid_x0 = self.algorithm.sigmoid_x0
         self.worker.actor.old_rollout_probs = self.algorithm.old_rollout_probs
+        self.worker.actor.think_filtering = self.algorithm.think_filtering
+        self.worker.critic.think_filtering = self.algorithm.think_filtering
 
     def deep_post_init(self):
         recursive_post_init(self)

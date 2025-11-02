@@ -320,13 +320,6 @@ class RayPPOTrainer:
             print(f"WARNING: think_filtering is enabled. Effective rollout.n will be {effective_n} (original: {config.worker.rollout.n})")
             print(f"         Actual batch size per step: {config.data.rollout_batch_size} * {effective_n} = {config.data.rollout_batch_size * effective_n}")
 
-        # Initialize replay buffer for think_filtering
-        # Buffer stores: (original_uid, gen_batch, original_batch, think_acc_variance)
-        # gen_batch: problem without answer, original_batch: original data for repeat+union
-        # think_acc_variance: variance of think accuracies in current rollout (not history)
-        self.think_replay_buffer = []
-        self.replay_buffer_max_size = getattr(config.algorithm, 'replay_buffer_max_size', 100)  # Max UIDs to store
-
     def _get_effective_n(self) -> int:
         """
         Get the effective rollout.n considering think_filtering.
@@ -341,115 +334,6 @@ class RayPPOTrainer:
             if effective_n == 0:
                 effective_n = 1  # Ensure at least 1
         return effective_n
-
-    def _add_to_think_buffer(self, gen_batch, original_batch, uid, think_acc_variance):
-        """
-        Add a problem (gen_batch without answer) to the replay buffer.
-        When buffer is full, replace the entry with lowest variance.
-
-        NOTE: Re-sampled entries (from _sample_from_think_buffer) are treated as NEW entries.
-        They must re-compete based on their updated variance to get back into the buffer.
-
-        Args:
-            gen_batch: DataProto containing the problem (input_ids, etc.)
-            original_batch: Original batch for repeat+union operations
-            uid: The original UID of the problem
-            think_acc_variance: Variance of think accuracies in current rollout
-
-        Returns:
-            int: 1 if added, 0 if rejected (variance too low)
-        """
-        from copy import deepcopy
-
-        # Check if UID already exists in buffer (should be rare since sampled entries are removed)
-        for i, (buffer_uid, _, _, _) in enumerate(self.think_replay_buffer):
-            if buffer_uid == uid:
-                # This UID is already in buffer, skip (shouldn't happen often after sampling removal)
-                return 0
-
-        # If buffer at max capacity, compete with lowest variance entry
-        if len(self.think_replay_buffer) >= self.replay_buffer_max_size:
-            # Find the entry with minimum variance
-            min_variance_idx = min(range(len(self.think_replay_buffer)),
-                                   key=lambda i: self.think_replay_buffer[i][3])
-            min_variance = self.think_replay_buffer[min_variance_idx][3]
-
-            # Only add if current variance is higher than the minimum
-            if think_acc_variance <= min_variance:
-                return 0  # Don't add low-variance sample
-
-            # Remove the lowest variance entry to make room
-            self.think_replay_buffer.pop(min_variance_idx)
-
-        # Deep copy to avoid reference issues
-        # Store: (uid, gen_batch, original_batch, think_acc_variance)
-        buffer_entry = (uid, deepcopy(gen_batch), deepcopy(original_batch), think_acc_variance)
-        self.think_replay_buffer.append(buffer_entry)
-
-        return 1
-
-    def _sample_from_think_buffer(self, count=1, exclude_uids=None):
-        """
-        Sample entries from the replay buffer with variance-based weighting.
-        Prioritize sampling problems with higher think_acc variance.
-
-        IMPORTANT: Sampled entries are REMOVED from the buffer.
-        They can be re-added later based on updated variance after rollout.
-
-        Args:
-            count: Number of entries to sample
-            exclude_uids: Set of UIDs to exclude (e.g., UIDs with nothink correct in current batch)
-
-        Returns:
-            List of tuples: [(gen_batch, original_batch), ...], or [] if buffer is empty
-        """
-        from copy import deepcopy
-
-        if len(self.think_replay_buffer) == 0:
-            return []
-
-        if exclude_uids is None:
-            exclude_uids = set()
-
-        # Filter buffer to exclude specified UIDs
-        valid_indices = []
-        valid_variances = []
-        for idx, (uid, gen_batch, original_batch, variance) in enumerate(self.think_replay_buffer):
-            if uid not in exclude_uids:
-                valid_indices.append(idx)
-                valid_variances.append(variance)
-
-        # If no valid entries after filtering, return empty
-        if len(valid_indices) == 0:
-            return []
-
-        # Convert to probabilities (higher variance = higher probability)
-        # Add small epsilon to avoid zero weights
-        weights = np.array(valid_variances) + 1e-6
-        probabilities = weights / weights.sum()
-
-        # Sample based on variance-weighted probabilities
-        sample_size = min(count, len(valid_indices))
-        sampled_positions = np.random.choice(
-            len(valid_indices),
-            size=sample_size,
-            replace=False,
-            p=probabilities
-        )
-
-        # Collect sampled entries and their buffer indices
-        # Sort indices in descending order to remove from end first (avoid index shift issues)
-        sampled_buffer_indices = sorted([valid_indices[pos] for pos in sampled_positions], reverse=True)
-
-        # Return deep copies of sampled entries (gen_batch, original_batch)
-        results = []
-        for idx in sampled_buffer_indices:
-            uid, gen_batch, original_batch, variance = self.think_replay_buffer[idx]
-            results.append((deepcopy(gen_batch), deepcopy(original_batch)))
-            # Remove from buffer - sampled entries will re-compete for entry after rollout
-            self.think_replay_buffer.pop(idx)
-
-        return results
 
     def _maybe_log_val_generations(
         self, inputs: List[str], outputs: List[str], labels: List[str], scores: List[float]
@@ -717,9 +601,6 @@ class RayPPOTrainer:
                             else:
                                 uid2has_think_correct[uid] = True
 
-                    # Note: Buffer addition moved to after additional rollout
-                    # This allows buffer samples to be re-evaluated and only re-added if variance remains high
-
                     # Compute nothink pass@k accuracy for each uid
                     uid2nothink_pass_acc = {}
                     for uid, acc_info in uid2nothink_acc.items():
@@ -739,8 +620,7 @@ class RayPPOTrainer:
                     # nothink_acc_threshold is top 60% accuracy of the batch
                     nothink_acc_values = list(uid2nothink_pass_acc.values())
                     if len(nothink_acc_values) > 0:
-                        # nothink_acc_threshold = np.percentile(nothink_acc_values, 30)
-                        nothink_acc_threshold = 0.0
+                        nothink_acc_threshold = np.percentile(nothink_acc_values, 30)
                     else:
                         nothink_acc_threshold = 0.0
                     print(f"think_filtering: Nothink accuracy threshold set to {nothink_acc_threshold:.4f}")
@@ -764,21 +644,18 @@ class RayPPOTrainer:
                     # Add metrics
                     all_metrics["filtering/uids_need_think_rollout"].append(len(uids_need_think_rollout))
                     # Track how many UIDs use think due to low nothink acc vs no nothink correct
-                    # uids_think_due_to_low_acc = sum(1 for uid in uid2idxs.keys()
-                    #                                  if uid2has_nothink_correct[uid] and uid2should_use_think[uid])
-                    # uids_think_due_to_no_correct = sum(1 for uid in uid2idxs.keys()
-                    #                                     if not uid2has_nothink_correct[uid] and uid2should_use_think[uid])
-                    # all_metrics["filtering/uids_think_due_to_low_acc"].append(uids_think_due_to_low_acc)
-                    # all_metrics["filtering/uids_think_due_to_no_correct"].append(uids_think_due_to_no_correct)
+                    uids_think_due_to_low_acc = sum(1 for uid in uid2idxs.keys()
+                                                     if uid2has_nothink_correct[uid] and uid2should_use_think[uid])
+                    uids_think_due_to_no_correct = sum(1 for uid in uid2idxs.keys()
+                                                        if not uid2has_nothink_correct[uid] and uid2should_use_think[uid])
+                    all_metrics["filtering/uids_think_due_to_low_acc"].append(uids_think_due_to_low_acc)
+                    all_metrics["filtering/uids_think_due_to_no_correct"].append(uids_think_due_to_no_correct)
                     # Track average nothink accuracy
-                    # avg_nothink_acc = sum(uid2nothink_pass_acc.values()) / len(uid2nothink_pass_acc) if len(uid2nothink_pass_acc) > 0 else 0.0
-                    # all_metrics["filtering/avg_nothink_acc"].append(avg_nothink_acc)
+                    avg_nothink_acc = sum(uid2nothink_pass_acc.values()) / len(uid2nothink_pass_acc) if len(uid2nothink_pass_acc) > 0 else 0.0
+                    all_metrics["filtering/avg_nothink_acc"].append(avg_nothink_acc)
                     # Perform additional rollouts if needed (max 2 attempts)
-                    max_additional_attempts = 1
+                    max_additional_attempts = 2
                     solved_uids = []
-                    # Track buffer samples for re-evaluation after rollout
-                    all_buffer_uid_to_problem = {}
-
                     for attempt in range(max_additional_attempts):
                         if len(uids_need_think_rollout) == 0:
                             break
@@ -786,52 +663,11 @@ class RayPPOTrainer:
                         print(f"think_filtering: Additional rollout attempt {attempt + 1}/{max_additional_attempts}")
                         print(f"  - {len(uids_need_think_rollout)} UIDs need think rollout")
 
-                        # Build exclude_uids: All UIDs in current batch
-                        exclude_uids = set(uid2idxs.keys())
-
-                        # Sample from replay buffer to replace some samples
-                        # Exclude all UIDs that already exist in current batch
-                        buffer_samples = self._sample_from_think_buffer(
-                            count=len(uids_need_think_rollout),
-                            exclude_uids=exclude_uids
-                        )
-                        num_buffer_used = len(buffer_samples)
-
-                        if num_buffer_used > 0:
-                            print(f"  - Using {num_buffer_used} samples from replay buffer (excluded {len(exclude_uids)} UIDs from current batch)")
-                            all_metrics["replay/samples_used"].append(num_buffer_used)
-
                         # Batch rollout: collect all UIDs that need think rollout
                         original_indices = []
                         uid_to_original_idx = {}
-                        new_uid_to_original_idx = {}  # Track UIDs for buffer samples
 
-                        # First, add buffer samples (use new UIDs for them)
-                        buffer_gen_batches = []
-                        buffer_original_batches = []
-                        buffer_uids = []
-                        # Map new UID -> (gen_batch, original_batch) for re-adding to buffer after rollout
-                        buffer_uid_to_problem = {}
-
-                        for gen_batch_sample, original_batch_sample in buffer_samples:
-                            # Generate new UID for this buffer sample
-                            new_uid = str(uuid.uuid4())
-                            buffer_gen_batches.append(gen_batch_sample)
-                            buffer_original_batches.append(original_batch_sample)
-                            buffer_uids.append(new_uid)
-                            # Save the problem for potential re-addition to buffer (both local and global)
-                            buffer_uid_to_problem[new_uid] = (gen_batch_sample, original_batch_sample)
-                            all_buffer_uid_to_problem[new_uid] = (gen_batch_sample, original_batch_sample)
-                            # Mark this as a buffer-sourced UID (we'll handle it differently)
-                            new_uid_to_original_idx[new_uid] = -1  # Special marker for buffer samples
-
-                        # Track which UIDs from uids_need_think_rollout are replaced by buffer samples
-                        uids_replaced_by_buffer = uids_need_think_rollout[:num_buffer_used]
-
-                        # Then, add remaining samples from original data (if buffer doesn't have enough)
-                        uids_to_rollout_from_original = uids_need_think_rollout[num_buffer_used:]
-
-                        for uid in uids_to_rollout_from_original:
+                        for uid in uids_need_think_rollout:
                             uid_idxs = uid2idxs[uid]
                             if len(uid_idxs) == 0:
                                 continue
@@ -843,123 +679,88 @@ class RayPPOTrainer:
                             original_indices.append(original_idx)
                             uid_to_original_idx[original_idx] = uid
 
-                        if len(original_indices) == 0 and num_buffer_used == 0:
+                        if len(original_indices) == 0:
                             break
 
-                        # Create batch gen_batch and original_batch for rollout
-                        # Combine buffer samples and original samples
-                        gen_batch_parts = []
-                        original_batch_parts = []
-                        all_rollout_uids = []
+                        # Create batch gen_batch and original_batch for all UIDs that need rollout
+                        original_indices_tensor = torch.tensor(original_indices, dtype=torch.long)
+                        batch_gen_batch = gen_batch_for_additional_rollouts[original_indices_tensor]
+                        batch_original_batch = original_batch_for_additional_rollouts[original_indices_tensor]
 
-                        # Add buffer samples
-                        if num_buffer_used > 0:
-                            buffer_gen_batch_combined = DataProto.concat(buffer_gen_batches)
-                            buffer_original_batch_combined = DataProto.concat(buffer_original_batches)
-                            gen_batch_parts.append(buffer_gen_batch_combined)
-                            original_batch_parts.append(buffer_original_batch_combined)
-                            all_rollout_uids.extend(buffer_uids)
+                        # Perform batch think rollout (n=16, all think)
+                        try:
+                            batch_gen_batch.meta_info["intervention_think_n"] = 16
+                            batch_gen_batch.meta_info["intervention_nothink_n"] = 0
 
-                        # Add original samples
-                        # if len(original_indices) > 0:
-                        #     original_indices_tensor = torch.tensor(original_indices, dtype=torch.long)
-                        #     batch_gen_batch_original = gen_batch_for_additional_rollouts[original_indices_tensor]
-                        #     batch_original_batch_original = original_batch_for_additional_rollouts[original_indices_tensor]
-                        #     gen_batch_parts.append(batch_gen_batch_original)
-                        #     original_batch_parts.append(batch_original_batch_original)
-                        #     # Add original UIDs
-                        #     for original_idx in original_indices:
-                        #         all_rollout_uids.append(uid_to_original_idx[original_idx])
+                            # Pad to make divisible by world_size
+                            from ..protocol import pad_dataproto_to_divisor, unpad_dataproto
+                            batch_gen_batch_padded, pad_size = pad_dataproto_to_divisor(
+                                batch_gen_batch, self.actor_rollout_wg.world_size
+                            )
 
-                            # Combine all parts
-                            batch_gen_batch = DataProto.concat(gen_batch_parts)
-                            batch_original_batch = DataProto.concat(original_batch_parts)
+                            # Generate sequences for the batch
+                            batch_gen_output_padded = self.actor_rollout_wg.generate_sequences(batch_gen_batch_padded)
 
-                            # Perform batch think rollout (n=16, all think)
-                            try:
-                                batch_gen_batch.meta_info["intervention_think_n"] = 16
-                                batch_gen_batch.meta_info["intervention_nothink_n"] = 0
+                            # Unpad the generation output (removes padded samples and their responses)
+                            # Since intervention_think_n=16, each input generates 16 outputs
+                            # So we need to remove the last pad_size*16 samples
+                            batch_gen_output = unpad_dataproto(batch_gen_output_padded, pad_size=pad_size * 16)
 
-                                # Pad to make divisible by world_size
-                                from ..protocol import pad_dataproto_to_divisor, unpad_dataproto
-                                batch_gen_batch_padded, pad_size = pad_dataproto_to_divisor(
-                                    batch_gen_batch, self.actor_rollout_wg.world_size
-                                )
+                            # Repeat original batch (no padding needed here)
+                            batch_repeated = batch_original_batch.repeat(repeat_times=16, interleave=True)
 
-                                # Generate sequences for the batch
-                                batch_gen_output_padded = self.actor_rollout_wg.generate_sequences(batch_gen_batch_padded)
+                            # Now union (both should be 20*16=320)
+                            batch_additional = batch_repeated.union(batch_gen_output)
 
-                                # Unpad the generation output (removes padded samples and their responses)
-                                # Since intervention_think_n=16, each input generates 16 outputs
-                                # So we need to remove the last pad_size*16 samples
-                                batch_gen_output = unpad_dataproto(batch_gen_output_padded, pad_size=pad_size * 16)
+                            # Assign UIDs - need to repeat each uid 16 times
+                            repeated_uids = []
+                            for original_idx in original_indices:
+                                uid = uid_to_original_idx[original_idx]
+                                repeated_uids.extend([uid] * 16)
+                            batch_additional.non_tensor_batch["uid"] = np.array(repeated_uids, dtype=object)
 
-                                # Repeat original batch (no padding needed here)
-                                batch_repeated = batch_original_batch.repeat(repeat_times=16, interleave=True)
+                            # Compute reward for the batch
+                            add_reward_tensor, add_reward_metrics = ray.get(
+                                self.reward_fn.compute_reward.remote(batch_additional)
+                            )
+                            batch_additional.batch["token_level_scores"] = add_reward_tensor
 
-                                # Now union (both should be 20*16=320)
-                                batch_additional = batch_repeated.union(batch_gen_output)
+                            # Store accuracy in batch for later use
+                            add_accuracy = add_reward_metrics.get("accuracy", [])
+                            batch_additional.batch["accuracy"] = torch.tensor(add_accuracy, dtype=torch.float32)
 
-                                # Assign UIDs - need to repeat each uid 16 times
-                                # Use all_rollout_uids which includes both buffer and original UIDs
-                                repeated_uids = []
-                                for uid in all_rollout_uids:
-                                    repeated_uids.extend([uid] * 16)
-                                batch_additional.non_tensor_batch["uid"] = np.array(repeated_uids, dtype=object)
+                            # Check which UIDs now have correct think samples
+                            batch_uids = batch_additional.non_tensor_batch["uid"]
 
-                                # Compute reward for the batch
-                                add_reward_tensor, add_reward_metrics = ray.get(
-                                    self.reward_fn.compute_reward.remote(batch_additional)
-                                )
-                                batch_additional.batch["token_level_scores"] = add_reward_tensor
+                            # Group by uid to check correctness
+                            uid_has_correct = {}
+                            for uid, acc in zip(batch_uids, add_accuracy):
+                                if uid not in uid_has_correct:
+                                    uid_has_correct[uid] = False
+                                if acc > 0:
+                                    uid_has_correct[uid] = True
 
-                                # Store accuracy in batch for later use
-                                add_accuracy = add_reward_metrics.get("accuracy", [])
-                                batch_additional.batch["accuracy"] = torch.tensor(add_accuracy, dtype=torch.float32)
+                            # Update tracking and collect successful UIDs
+                            successful_uids = []
+                            for uid, has_correct in uid_has_correct.items():
+                                if has_correct:
+                                    successful_uids.append(uid)
+                                    uid2has_think_correct[uid] = True
+                                    solved_uids.append(uid)
+                                    print(f"  - UID {uid}: Successfully got correct think samples")
+                                else:
+                                    print(f"  - UID {uid}: Additional think rollout did not produce correct samples")
 
-                                # Check which UIDs now have correct think samples
-                                batch_uids = batch_additional.non_tensor_batch["uid"]
+                            # Remove successful UIDs from the list
+                            for uid in successful_uids:
+                                uids_need_think_rollout.remove(uid)
 
-                                # Group by uid to check correctness
-                                uid_has_correct = {}
-                                for uid, acc in zip(batch_uids, add_accuracy):
-                                    if uid not in uid_has_correct:
-                                        uid_has_correct[uid] = False
-                                    if acc > 0:
-                                        uid_has_correct[uid] = True
-
-                                # Update tracking and collect successful UIDs
-                                successful_uids = []
-                                for uid, has_correct in uid_has_correct.items():
-                                    if has_correct:
-                                        successful_uids.append(uid)
-                                        uid2has_think_correct[uid] = True
-                                        solved_uids.append(uid)
-                                        # print(f"  - UID {uid}: Successfully got correct think samples")
-                                    # else:
-                                        # print(f"  - UID {uid}: Additional think rollout did not produce correct samples")
-
-                                # Remove UIDs from uids_need_think_rollout:
-                                # 1. UIDs that were replaced by buffer samples (even if rollout failed)
-                                # 2. UIDs from original data that successfully got correct samples
-
-                                # Remove buffer-replaced UIDs (they were replaced, so consider them handled)
-                                for uid in uids_replaced_by_buffer:
-                                    if uid in uids_need_think_rollout:
-                                        uids_need_think_rollout.remove(uid)
-
-                                # Remove successfully solved UIDs from original data
-                                for uid in successful_uids:
-                                    # Only remove if it's from original data (not a buffer-generated new UID)
-                                    if uid in uids_to_rollout_from_original and uid in uids_need_think_rollout:
-                                        uids_need_think_rollout.remove(uid)
-
-                                # Add the entire batch to new_batch (we'll filter later)
-                                new_batch = DataProto.concat([new_batch, batch_additional])
-                                
-                            except Exception as e:
-                                print(f"  - Batch additional think rollout failed: {e}")
-                                break
+                            # Add the entire batch to new_batch (we'll filter later)
+                            new_batch = DataProto.concat([new_batch, batch_additional])
+                            
+                        except Exception as e:
+                            print(f"  - Batch additional think rollout failed: {e}")
+                            break
                         
                     all_metrics["filtering/think_rollout_solved_uids"].append(len(solved_uids))
                     print(f"think_filtering: Additional rollout completed. Solved {len(solved_uids)} UIDs.")
@@ -980,72 +781,6 @@ class RayPPOTrainer:
                     for idx, uid in enumerate(uids):
                         uid2idxs[uid].append(idx)
 
-                    # Initialize tracking for any new UIDs (e.g., from buffer samples)
-                    # and check their correctness based on accuracy
-                    for uid in uid2idxs.keys():
-                        if uid not in uid2has_nothink_correct:
-                            uid2has_nothink_correct[uid] = False
-                        if uid not in uid2has_think_correct:
-                            uid2has_think_correct[uid] = False
-
-                            # Check if this new UID has think correct samples
-                            if accuracy is not None:
-                                for idx in uid2idxs[uid]:
-                                    is_nothink = enforce_nothinking[idx].item() if torch.is_tensor(enforce_nothinking[idx]) else enforce_nothinking[idx]
-                                    acc = accuracy[idx]
-                                    if not is_nothink and acc > 0:
-                                        uid2has_think_correct[uid] = True
-                                        break
-
-                        if uid not in uid2should_use_think:
-                            # New UIDs from buffer are for think rollout, so should_use_think = True
-                            uid2should_use_think[uid] = True
-
-                    # Add samples to replay buffer after additional rollout
-                    # Calculate variance for all UIDs and add to buffer if they have think correct
-                    samples_added = 0
-                    for uid in uid2idxs.keys():
-                        if uid2has_think_correct[uid]:
-                            # Collect think accuracies for this UID
-                            think_accs = []
-                            for idx in uid2idxs[uid]:
-                                is_nothink = enforce_nothinking[idx].item() if torch.is_tensor(enforce_nothinking[idx]) else enforce_nothinking[idx]
-                                if accuracy is not None:
-                                    acc = accuracy[idx]
-                                    if not is_nothink:
-                                        think_accs.append(acc)
-
-                            # Calculate variance of think accuracies in current rollout
-                            if len(think_accs) > 0:
-                                think_acc_variance = np.var(think_accs[0:8])  # Only consider first 8 think samples
-
-                                # Get gen_batch and original_batch for this UID
-                                gen_batch_to_add = None
-                                original_batch_to_add = None
-
-                                # Check if this UID came from buffer sampling
-                                if uid in all_buffer_uid_to_problem:
-                                    # This UID came from buffer, use the saved problem
-                                    gen_batch_to_add, original_batch_to_add = all_buffer_uid_to_problem[uid]
-                                else:
-                                    # This UID is from original data, extract from gen_batch_for_additional_rollouts
-                                    # Find the index in the original batch (before repeat)
-                                    first_idx = uid2idxs[uid][0]
-                                    original_idx = first_idx // self.config.worker.rollout.n
-
-                                    # Extract single sample from gen_batch and original_batch
-                                    gen_batch_to_add = gen_batch_for_additional_rollouts[original_idx:original_idx+1]
-                                    original_batch_to_add = original_batch_for_additional_rollouts[original_idx:original_idx+1]
-
-                                # Add to buffer with updated think_acc_variance
-                                if gen_batch_to_add is not None and original_batch_to_add is not None:
-                                    added_count = self._add_to_think_buffer(
-                                        gen_batch_to_add, original_batch_to_add, uid, think_acc_variance
-                                    )
-                                    if added_count > 0:
-                                        samples_added += added_count
-                    all_metrics["replay/samples_added"].append(samples_added)
-                    print(f"think_filtering: Added {samples_added} samples to replay buffer")
                     # Filter based on should_use_think decision with balanced selection
                     kept_sample_idxs = []
                     think_kept = 0
@@ -1053,7 +788,7 @@ class RayPPOTrainer:
 
                     for uid, idxs in uid2idxs.items():
                         should_use_think = uid2should_use_think.get(uid, False)
-                        has_think_correct = uid2has_think_correct.get(uid, False)
+                        has_think_correct = uid2has_think_correct[uid]
 
                         # Determine which samples to keep based on should_use_think
                         if not should_use_think:
@@ -1116,40 +851,20 @@ class RayPPOTrainer:
                                                 cnt += 1
                                             else:
                                                 break
-                            # else:
-                            #     # Scenario 2a: No think correct samples - allow all-wrong samples to pass (cold-start tolerance)
-                            #     # Note: Buffer replacement already happened before additional rollout
-                            #     cnt = 0
-                            #     for idx in idxs:
-                            #         # add eight samples at most
-                            #         is_nothink = enforce_nothinking[idx].item() if torch.is_tensor(enforce_nothinking[idx]) else enforce_nothinking[idx]
-                            #         if not is_nothink:
-                            #             if cnt < 8:
-                            #                 kept_sample_idxs.append(idx)
-                            #                 think_kept += 1
-                            #                 cnt += 1
-                            #             else:
-                            #                 break
-                    print(f"think_filtering: kept {len(kept_sample_idxs)} out of {len(new_batch)} samples")
-                    print(f"keep think samples: {think_kept}, keep nothink samples: {nothink_kept}")
-                    for uid, idxs in uid2idxs.items():
-                        should_use_think = uid2should_use_think.get(uid, False)
-                        has_think_correct = uid2has_think_correct.get(uid, False)
-                        if should_use_think and not has_think_correct:
-                            # print(f"UID {uid} should use think but has no think correct samples.")
-                            cnt = 0
-                            for idx in idxs:
-                                # add eight samples at most
-                                is_nothink = enforce_nothinking[idx].item() if torch.is_tensor(enforce_nothinking[idx]) else enforce_nothinking[idx]
-                                if not is_nothink:
-                                    if cnt < 8:
-                                        kept_sample_idxs.append(idx)
-                                        think_kept += 1
-                                        cnt += 1
-                                    else:
-                                        break
+                            else:
+                                # Scenario 2a: No think correct samples - keep all think for now
+                                cnt = 0
+                                for idx in idxs:
+                                    # add eight samples at most
+                                    is_nothink = enforce_nothinking[idx].item() if torch.is_tensor(enforce_nothinking[idx]) else enforce_nothinking[idx]
+                                    if not is_nothink:
+                                        if cnt < 8:
+                                            kept_sample_idxs.append(idx)
+                                            think_kept += 1
+                                            cnt += 1
+                                        else:
+                                            break
 
-                    # Filter samples based on kept_sample_idxs
                     if len(kept_sample_idxs) == 0:
                         print("Warning: No sample is kept after think_filtering. Skipping filtering for this batch.")
                     else:
@@ -1184,23 +899,6 @@ class RayPPOTrainer:
                 print(f"{current_batch_size=} >= {rollout_batch_size=}. Finish generating.")
                 if self.config.algorithm.online_filtering or self.config.algorithm.think_filtering:
                     metrics.update({f"reward/{k}": v for k, v in reduce_metrics(all_metrics).items()})
-
-                # Add replay buffer metrics
-                if self.config.algorithm.think_filtering:
-                    metrics["replay/buffer_size_uids"] = len(self.think_replay_buffer)
-
-                    # Calculate and log variance statistics
-                    if len(self.think_replay_buffer) > 0:
-                        # Extract variances directly from buffer (4th element in tuple)
-                        variances = [variance for _, _, _, variance in self.think_replay_buffer]
-
-                        metrics["replay/buffer_variance_mean"] = np.mean(variances)
-                        metrics["replay/buffer_variance_max"] = np.max(variances)
-                        metrics["replay/buffer_variance_min"] = np.min(variances)
-                    else:
-                        metrics["replay/buffer_variance_mean"] = 0.0
-                        metrics["replay/buffer_variance_max"] = 0.0
-                        metrics["replay/buffer_variance_min"] = 0.0
 
                 # Use effective_n for final batch size
                 return batch[: self.config.data.rollout_batch_size * effective_n]
