@@ -303,20 +303,30 @@ def _pass_at_accracy_for_each_query(scores, ground_truths):
             gt2think_acc[ground_truth] = []
             gt2nothink_acc[ground_truth] = []
             gt2acc[ground_truth] = []
-        gt2think_acc[ground_truth].append(score["think_acc"])
-        gt2nothink_acc[ground_truth].append(score["no_think_acc"])
+            
+        if score["think_ratio"] > 0.5:
+            gt2think_acc[ground_truth].append(score["think_acc"])
+        else:
+            gt2nothink_acc[ground_truth].append(score["no_think_acc"])
+        
         gt2acc[ground_truth].append(score["accuracy"])
     
     for i, score in enumerate(scores):
-        think_acc = max(gt2think_acc[ground_truths[i]])
-        no_think_acc = max(gt2nothink_acc[ground_truths[i]])
+        think_acc = max(gt2think_acc[ground_truths[i]]) if len(gt2think_acc[ground_truths[i]]) != 0 else 0
+        pass_at_1_acc_think = gt2think_acc[ground_truths[i]][0] if len(gt2think_acc[ground_truths[i]]) != 0 else 0
+        no_think_acc = max(gt2nothink_acc[ground_truths[i]]) if len(gt2nothink_acc[ground_truths[i]]) != 0 else 0
+        pass_at_1_acc_nothink = gt2nothink_acc[ground_truths[i]][0] if len(gt2nothink_acc[ground_truths[i]]) != 0 else 0
         total_acc = max(gt2acc[ground_truths[i]])
         score["pass_at_accuracy"] = total_acc
         if score["think_ratio"] > 0.5:
             score["think_pass_at_accuracy"] = think_acc
+            score["think_pass_at_1_accuracy"] = pass_at_1_acc_think
+            score["nothink_pass_at_1_accuracy"] = 0.0
             score["nothink_pass_at_accuracy"] = 0.0
         else:
             score["nothink_pass_at_accuracy"] = no_think_acc
+            score["nothink_pass_at_1_accuracy"] = pass_at_1_acc_nothink
+            score["think_pass_at_1_accuracy"] = 0.0
             score["think_pass_at_accuracy"] = 0.0
     return scores
 

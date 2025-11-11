@@ -105,6 +105,9 @@ class ActorConfig:
     top_k: int = 5  # Number of top-K tokens to consider for SIMKO
     mix_topk_coef: float = 0.01  # Mixing coefficient for top-K tokens
     tau: float = 0.8 # Entropy quantile threshold for determining high-entropy positions
+    advantage_scaling_base: float = 1.0
+    advantage_scaling_k1: float = 8.0
+    advantage_scaling_k2: float = 15.0
     model: ModelConfig = field(default_factory=ModelConfig)
     optim: OptimConfig = field(default_factory=OptimConfig)
     fsdp: FSDPConfig = field(default_factory=FSDPConfig)
@@ -116,6 +119,7 @@ class ActorConfig:
     kl_penalty: str = field(default="kl", init=False)
     kl_coef: float = field(default=0.0, init=False)
     think_filtering: bool = field(default=False, init=False)
+    think_advantage_scaling: bool = field(default=False, init=False)
 
 
 @dataclass

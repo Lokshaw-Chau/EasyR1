@@ -377,7 +377,18 @@ class DataParallelPPOActor(BasePPOActor):
         temperature = data.meta_info["temperature"]  # temperature must be in the data.meta_info to avoid slient error
         training_process = data.meta_info["training_process"]
 
-        select_keys = ["responses", "input_ids", "attention_mask", "position_ids", "old_log_probs", "advantages", "enforce_nothinking", "rollout_prob"]
+        select_keys = [
+            "responses",
+            "input_ids",
+            "attention_mask",
+            "position_ids",
+            "old_log_probs",
+            "advantages",
+            "enforce_nothinking",
+            "rollout_prob",
+        ]
+        if self.config.think_advantage_scaling or self.config.think_filtering:
+            select_keys.append("advantage_scaling_factor")
         if self.config.use_kl_loss and not self.config.disable_kl:
             select_keys.append("ref_log_probs")
 
@@ -468,14 +479,74 @@ class DataParallelPPOActor(BasePPOActor):
                         # SIMKO doesn't return separate clipfrac metrics, so we duplicate
                         pg_clipfrac_lower = [torch.tensor(0.0), torch.tensor(0.0)]
                     else:
-                        # When think_filtering is enabled, set first token advantage to 1.0
-                        if self.config.think_filtering:
+                        # Dynamic advantage scaling based on think_acc - nothink_acc difference
+                        # This can be enabled independently of think_filtering via think_advantage_scaling config
+                        scaling_metrics = None
+                        if self.config.think_advantage_scaling: #  or self.config.think_filtering:
                             advantages = advantages.clone()
-                            advantages[~enforce_nothinking, 0] = 0.1  # think样本：大的正advantage
-                            advantages[~enforce_nothinking, 1:] *= 3.0
-                            advantages[enforce_nothinking, 0] = 0.1  # no-think样本：小的advantage
-                            # set old_log_probs first token to 0
-                            old_log_probs[:, 0] = torch.zeros_like(old_log_probs[:, 0])
+
+                            # Get scaling factor from batch data (if available)
+                            scaling_factor = model_inputs.get("advantage_scaling_factor", None)
+
+                            if scaling_factor is not None:
+                                if not torch.is_tensor(scaling_factor):
+                                    scaling_factor = torch.as_tensor(
+                                        scaling_factor, dtype=advantages.dtype, device=advantages.device
+                                    )
+                                else:
+                                    scaling_factor = scaling_factor.to(
+                                        device=advantages.device, dtype=advantages.dtype
+                                    )
+
+                                scaling_factor = scaling_factor.view(-1)
+                                enforce_mask = enforce_nothinking.to(device=advantages.device, dtype=torch.bool)
+                                think_mask = ~enforce_mask
+
+                                scaling_metrics = {
+                                    "actor/advantage_scaling_factor_mean": 0.0,
+                                    "actor/advantage_scaling_factor_max": 0.0,
+                                    "actor/advantage_scaling_factor_min": 0.0,
+                                }
+
+                                if think_mask.any():
+                                    think_scaling = torch.clamp(scaling_factor[think_mask], min=1e-4).detach()
+
+                                    # Get responses to find <tool_call> token positions
+                                    responses = model_inputs["responses"]
+                                    tool_call_token_id = 151657
+
+                                    # Apply scaling from second token (index 1) to <tool_call> token for each think sample
+                                    think_indices = torch.where(think_mask)[0]
+                                    for i, sample_idx in enumerate(think_indices):
+                                        # Find the position of <tool_call> token in this sample
+                                        tool_call_positions = (responses[sample_idx] == tool_call_token_id).nonzero(as_tuple=True)[0]
+
+                                        if len(tool_call_positions) > 0:
+                                            # Get the first occurrence of <tool_call> token
+                                            tool_call_pos = tool_call_positions[0].item()
+                                            # Apply scaling from token 1 to tool_call_pos
+                                            advantages[sample_idx, 1:tool_call_pos] *= think_scaling[i]
+                                        else:
+                                            # If no <tool_call> token found, apply to all tokens from position 1 onwards (fallback)
+                                            advantages[sample_idx, 1:] *= think_scaling[i]
+
+                                    scaling_metrics = {
+                                        "actor/advantage_scaling_factor_mean": think_scaling.mean().item(),
+                                        "actor/advantage_scaling_factor_max": think_scaling.max().item(),
+                                        "actor/advantage_scaling_factor_min": think_scaling.min().item(),
+                                    }
+                                    print(f"[Debug] Think advantage scaling applied. Mean: {scaling_metrics['actor/advantage_scaling_factor_mean']:.4f}")
+                                    print(f"[Debug] Think advantage scaling applied. Max: {scaling_metrics['actor/advantage_scaling_factor_max']:.4f}")
+                                    print(f"[Debug] Think advantage scaling applied. Min: {scaling_metrics['actor/advantage_scaling_factor_min']:.4f}")
+
+                            else:
+                                print("[Warning] advantage_scaling_factor not found in batch data; skipping advantage scaling.")
+                            #     # Fallback to original hard-coded logic if scaling factor not available
+                            #     advantages[~enforce_nothinking, 0] = 0.3  # think样本：大的正advantage
+                            #     advantages[~enforce_nothinking, 1:] *= 3.0
+                            #     advantages[enforce_nothinking, 0] = 0.1  # no-think样本：小的advantage
+                            # # set old_log_probs first token to 0
+                            # # old_log_probs[:, 0] = torch.zeros_like(old_log_probs[:, 0])
                         
                         pg_loss, pg_clipfrac_higher, pg_clipfrac_lower, ppo_kl, cond_loss, resp_loss = core_algos.compute_policy_loss(
                             old_log_probs=old_log_probs,
@@ -620,10 +691,15 @@ class DataParallelPPOActor(BasePPOActor):
                         "actor/ppo_kl": ppo_kl.detach().item(),
                         "actor/cond_loss": cond_loss.mean().detach().item(),
                         "actor/clip_ratio_mode_high": self.config.clip_ratio_high,# +scaling_factor,
-                        "advantage/sum_of_absolute": advantages.abs().sum().detach().item(),
-                        "advantage/think_advantage_sum": advantages[~enforce_nothinking].sum().detach().item(),
-                        "advantage/nothink_advantage_sum": advantages[enforce_nothinking].sum().detach().item(),
+                        "advantage/sum_of_absolute": advantages[:, 0].abs().sum().detach().item(),
+                        "advantage/think_advantage_sum": advantages[~enforce_nothinking, 0].sum().detach().item(),
+                        "advantage/think_absolute_sum": advantages[~enforce_nothinking, 0].abs().sum().detach().item(),
+                        "advantage/nothink_advantage_sum": advantages[enforce_nothinking, 0].sum().detach().item(),
+                        "advantage/nothink_absolute_sum": advantages[enforce_nothinking, 0].abs().sum().detach().item(),
                     }
+
+                    if scaling_metrics is not None:
+                        batch_metrics.update(scaling_metrics)
 
                     # Add SIMKO-specific metrics if available
                     if self.config.simko and 'simko_metrics' in locals():

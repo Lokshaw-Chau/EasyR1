@@ -79,6 +79,12 @@ class AlgorithmConfig:
     # filtering configs
     online_filtering: bool = False
     think_filtering: bool = False
+    # Dynamic advantage scaling based on think_acc - nothink_acc difference
+    # This can be enabled independently of think_filtering
+    think_advantage_scaling: bool = False
+    advantage_scaling_base: float = 2.0
+    advantage_scaling_k1: float = 3.0
+    advantage_scaling_k2: float = 2.0
     filter_key: str = "accuracy"
     filter_low: float = 0.1
     filter_high: float = 0.99
@@ -134,6 +140,10 @@ class PPOConfig:
         self.worker.actor.sigmoid_x0 = self.algorithm.sigmoid_x0
         self.worker.actor.old_rollout_probs = self.algorithm.old_rollout_probs
         self.worker.actor.think_filtering = self.algorithm.think_filtering
+        self.worker.actor.think_advantage_scaling = self.algorithm.think_advantage_scaling
+        self.worker.actor.advantage_scaling_base = self.algorithm.advantage_scaling_base
+        self.worker.actor.advantage_scaling_k1 = self.algorithm.advantage_scaling_k1
+        self.worker.actor.advantage_scaling_k2 = self.algorithm.advantage_scaling_k2
         self.worker.critic.think_filtering = self.algorithm.think_filtering
 
     def deep_post_init(self):

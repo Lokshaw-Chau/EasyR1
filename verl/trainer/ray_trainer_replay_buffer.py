@@ -1,5 +1,3 @@
-######### replay
-
 # Copyright 2024 Bytedance Ltd. and/or its affiliates
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,7 +16,6 @@ FSDP PPO Trainer with Ray-based single controller.
 This trainer supports model-agonistic model initialization with huggingface
 """
 
-import math
 import os
 import random
 import uuid
@@ -764,38 +761,6 @@ class RayPPOTrainer:
         num_try_make_batch = 0
         print("Start generating batch...")
 
-        scaling_base = float(
-            getattr(
-                self.config.worker.actor,
-                "advantage_scaling_base",
-                getattr(self.config.algorithm, "advantage_scaling_base", 1.0),
-            )
-        )
-        scaling_k1 = float(
-            getattr(
-                self.config.worker.actor,
-                "advantage_scaling_k1",
-                getattr(self.config.algorithm, "advantage_scaling_k1", 0.0),
-            )
-        )
-        scaling_k2 = float(
-            getattr(
-                self.config.worker.actor,
-                "advantage_scaling_k2",
-                getattr(self.config.algorithm, "advantage_scaling_k2", 0.0),
-            )
-        )
-
-        def compute_advantage_scaling_factor(diff: float, nothink_acc: float) -> float:
-            if diff > 0.5 or nothink_acc == 0:
-                return 3.0
-            elif diff > 0:
-                return 1.0 + diff * 6.0
-            else:
-                return 0
-
-            # return scaling_base * math.exp(scaling_k1 * diff) * math.exp(-scaling_k2 * nothink_acc)
-
         # Calculate dynamic n
         # if self.config.algorithm.ri_schedule == "linear":
         #     intervention_n = int((1 - self.global_step/self.training_steps) * 7) + 2
@@ -922,7 +887,6 @@ class RayPPOTrainer:
                     uid2has_nothink_correct = {}
                     uid2has_think_correct = {}
                     uid2nothink_acc = {}  # Track nothink accuracy for each uid
-                    uid2think_acc = {}    # Track think accuracy for each uid
 
                     for idx, (uid, acc, is_nothink) in enumerate(
                         zip(uids, accuracy, enforce_nothinking)
@@ -934,17 +898,12 @@ class RayPPOTrainer:
                             uid2has_nothink_correct[uid] = False
                             uid2has_think_correct[uid] = False
                             uid2nothink_acc[uid] = {'correct': 0, 'total': 0}
-                            uid2think_acc[uid] = {'correct': 0, 'total': 0}
 
                         # Track nothink accuracy
                         if is_nothink:
                             uid2nothink_acc[uid]['total'] += 1
                             if acc > 0:
                                 uid2nothink_acc[uid]['correct'] += 1
-                        else:
-                            uid2think_acc[uid]['total'] += 1
-                            if acc > 0:
-                                uid2think_acc[uid]['correct'] += 1
 
                         # Track correct samples
                         if acc > 0:
@@ -963,66 +922,41 @@ class RayPPOTrainer:
                             uid2nothink_pass_acc[uid] = acc_info['correct'] / acc_info['total']
                         else:
                             uid2nothink_pass_acc[uid] = 0.0
-                    uid2think_pass_acc = {}
-                    for uid, acc_info in uid2think_acc.items():
-                        if acc_info['total'] > 0:
-                            uid2think_pass_acc[uid] = acc_info['correct'] / acc_info['total']
-                        else:
-                            uid2think_pass_acc[uid] = 0.0
+
                     # Identify UIDs that need additional think rollouts
                     # Use think if: (1) no nothink correct OR (2) nothink_acc < threshold
                     uids_need_think_rollout = []
                     uid2should_use_think = {}  # Track which UIDs should use think mode
-                    rerouted_to_think_count = 0
                     
                     
                     # Get nothink accuracy threshold from config (default: 0.5)
                     # nothink_acc_threshold = getattr(self.config.algorithm, 'nothink_acc_threshold', 0.5)
                     # nothink_acc_threshold is top 60% accuracy of the batch
                     nothink_acc_values = list(uid2nothink_pass_acc.values())
-                    think_acc_values = list(uid2think_pass_acc.values())
-                    # if len(nothink_acc_values) > 0:
-                    #     # nothink_acc_threshold = np.percentile(nothink_acc_values, 30)
-                    #     nothink_acc_threshold = 
-                    # else:
-                    #     nothink_acc_threshold = 0.0
-                    # print(f"think_filtering: Nothink accuracy threshold set to {nothink_acc_threshold:.4f}")
+                    if len(nothink_acc_values) > 0:
+                        # nothink_acc_threshold = np.percentile(nothink_acc_values, 30)
+                        nothink_acc_threshold = 0.0
+                    else:
+                        nothink_acc_threshold = 0.0
+                    print(f"think_filtering: Nothink accuracy threshold set to {nothink_acc_threshold:.4f}")
 
-
-                    # Calculate think_nothink_diff for advantage scaling
-                    uid2think_nothink_diff = {}
 
                     for uid in uid2idxs.keys():
                         has_nothink_correct = uid2has_nothink_correct[uid]
                         has_think_correct = uid2has_think_correct[uid]
                         nothink_pass_acc = uid2nothink_pass_acc[uid]
-                        think_pass_acc = uid2think_pass_acc[uid]
+
                         # Use think mode if:
                         # - No nothink correct samples, OR
                         # - Nothink accuracy below threshold
-                        # should_use_think = (not has_nothink_correct) or (nothink_pass_acc <= nothink_acc_threshold)
-                        should_use_think = not has_nothink_correct
-
-                        # if not should_use_think and has_nothink_correct:
-                        #     # Allow high-performing nothink samples to train think with probability scaled by accuracy
-                        #     reroute_prob = min(max(nothink_pass_acc * 0.5, 0.0), 1.0)
-                        #     if random.random() < reroute_prob:
-                        #         should_use_think = True
-                        #         rerouted_to_think_count += 1
-
+                        should_use_think = (not has_nothink_correct) or (nothink_pass_acc <= nothink_acc_threshold)
                         uid2should_use_think[uid] = should_use_think
-
-                        # Calculate accuracy difference for advantage scaling
-                        # This will be used to scale advantages based on how much better think performs
-                        think_nothink_diff = max(0.0, think_pass_acc - nothink_pass_acc)
-                        uid2think_nothink_diff[uid] = think_nothink_diff
 
                         # If should use think but don't have think correct, need additional rollout
                         if should_use_think and not has_think_correct:
                             uids_need_think_rollout.append(uid)
                     
                     # Add metrics
-                    all_metrics["filtering/uids_rerouted_from_nothink"].append(rerouted_to_think_count)
                     all_metrics["filtering/uids_need_think_rollout"].append(len(uids_need_think_rollout))
                     # Track how many UIDs use think due to low nothink acc vs no nothink correct
                     # uids_think_due_to_low_acc = sum(1 for uid in uid2idxs.keys()
@@ -1138,7 +1072,7 @@ class RayPPOTrainer:
 
                             # Perform batch think rollout (n=16, all think)
                             try:
-                                batch_gen_batch.meta_info["intervention_think_n"] = 8
+                                batch_gen_batch.meta_info["intervention_think_n"] = 16
                                 batch_gen_batch.meta_info["intervention_nothink_n"] = 0
 
                                 # Pad to make divisible by world_size
@@ -1317,66 +1251,66 @@ class RayPPOTrainer:
                         has_think_correct = uid2has_think_correct.get(uid, False)
 
                         # Determine which samples to keep based on should_use_think
-                        # if not should_use_think:
-                        #     # Scenario 1: Has nothink correct - keep all nothink samples
-                        #     for idx in idxs:
-                        #         is_nothink = enforce_nothinking[idx].item() if torch.is_tensor(enforce_nothinking[idx]) else enforce_nothinking[idx]
-                        #         if is_nothink:
-                        #             kept_sample_idxs.append(idx)
-                        #             nothink_kept += 1
-                        # else:
-                        # Scenario 2: No nothink correct - keep think samples
-                        if has_think_correct:
-                            # Scenario 2b: Has think correct - form group of size 8
-                            # Guarantee at least 1 correct and 1 incorrect (if exists), others random
-                            if accuracy is not None:
-                                think_correct_idxs = []
-                                think_incorrect_idxs = []
+                        if not should_use_think:
+                            # Scenario 1: Has nothink correct - keep all nothink samples
+                            for idx in idxs:
+                                is_nothink = enforce_nothinking[idx].item() if torch.is_tensor(enforce_nothinking[idx]) else enforce_nothinking[idx]
+                                if is_nothink:
+                                    kept_sample_idxs.append(idx)
+                                    nothink_kept += 1
+                        else:
+                            # Scenario 2: No nothink correct - keep think samples
+                            if has_think_correct:
+                                # Scenario 2b: Has think correct - form group of size 8
+                                # Guarantee at least 1 correct and 1 incorrect (if exists), others random
+                                if accuracy is not None:
+                                    think_correct_idxs = []
+                                    think_incorrect_idxs = []
 
-                                for idx in idxs:
-                                    is_nothink = enforce_nothinking[idx].item() if torch.is_tensor(enforce_nothinking[idx]) else enforce_nothinking[idx]
-                                    acc = accuracy[idx]
+                                    for idx in idxs:
+                                        is_nothink = enforce_nothinking[idx].item() if torch.is_tensor(enforce_nothinking[idx]) else enforce_nothinking[idx]
+                                        acc = accuracy[idx]
 
-                                    if not is_nothink:
-                                        if acc > 0:
-                                            think_correct_idxs.append(idx)
-                                        else:
-                                            think_incorrect_idxs.append(idx)
+                                        if not is_nothink:
+                                            if acc > 0:
+                                                think_correct_idxs.append(idx)
+                                            else:
+                                                think_incorrect_idxs.append(idx)
 
-                                # Ensure at least 1 correct and 1 incorrect (if both exist), then randomly select to fill up to 8
-                                selected_idxs = []
+                                    # Ensure at least 1 correct and 1 incorrect (if both exist), then randomly select to fill up to 8
+                                    selected_idxs = []
 
-                                # Guarantee at least 1 from each
-                                if len(think_correct_idxs) > 0:
-                                    selected_idxs.append(think_correct_idxs[0])
-                                if len(think_incorrect_idxs) > 0:
-                                    selected_idxs.append(think_incorrect_idxs[0])
+                                    # Guarantee at least 1 from each
+                                    if len(think_correct_idxs) > 0:
+                                        selected_idxs.append(think_correct_idxs[0])
+                                    if len(think_incorrect_idxs) > 0:
+                                        selected_idxs.append(think_incorrect_idxs[0])
 
-                                # Randomly select remaining to fill up to 8
-                                remaining_correct = think_correct_idxs[1:]
-                                remaining_incorrect = think_incorrect_idxs[1:]
-                                remaining_pool = remaining_correct + remaining_incorrect
+                                    # Randomly select remaining to fill up to 8
+                                    remaining_correct = think_correct_idxs[1:]
+                                    remaining_incorrect = think_incorrect_idxs[1:]
+                                    remaining_pool = remaining_correct + remaining_incorrect
 
-                                slots_left = 8 - len(selected_idxs)
-                                if slots_left > 0 and len(remaining_pool) > 0:
-                                    random.shuffle(remaining_pool)
-                                    selected_idxs.extend(remaining_pool[:slots_left])
+                                    slots_left = 8 - len(selected_idxs)
+                                    if slots_left > 0 and len(remaining_pool) > 0:
+                                        random.shuffle(remaining_pool)
+                                        selected_idxs.extend(remaining_pool[:slots_left])
 
-                                kept_sample_idxs.extend(selected_idxs)
-                                think_kept += len(selected_idxs)
-                            else:
-                                # Fallback: no accuracy data, keep up to 8 think samples
-                                print("think_filtering: No accuracy data available, using fallback for think sample selection.")
-                                cnt = 0
-                                for idx in idxs:
-                                    is_nothink = enforce_nothinking[idx].item() if torch.is_tensor(enforce_nothinking[idx]) else enforce_nothinking[idx]
-                                    if not is_nothink:
-                                        if cnt < 8:
-                                            kept_sample_idxs.append(idx)
-                                            think_kept += 1
-                                            cnt += 1
-                                        else:
-                                            break
+                                    kept_sample_idxs.extend(selected_idxs)
+                                    think_kept += len(selected_idxs)
+                                else:
+                                    # Fallback: no accuracy data, keep up to 8 think samples
+                                    print("think_filtering: No accuracy data available, using fallback for think sample selection.")
+                                    cnt = 0
+                                    for idx in idxs:
+                                        is_nothink = enforce_nothinking[idx].item() if torch.is_tensor(enforce_nothinking[idx]) else enforce_nothinking[idx]
+                                        if not is_nothink:
+                                            if cnt < 8:
+                                                kept_sample_idxs.append(idx)
+                                                think_kept += 1
+                                                cnt += 1
+                                            else:
+                                                break
                             # else:
                             #     # Scenario 2a: No think correct samples - allow all-wrong samples to pass (cold-start tolerance)
                             #     # Note: Buffer replacement already happened before additional rollout
@@ -1393,22 +1327,22 @@ class RayPPOTrainer:
                             #                 break
                     print(f"think_filtering: kept {len(kept_sample_idxs)} out of {len(new_batch)} samples")
                     print(f"keep think samples: {think_kept}, keep nothink samples: {nothink_kept}")
-                    # for uid, idxs in uid2idxs.items():
-                    #     should_use_think = uid2should_use_think.get(uid, False)
-                    #     has_think_correct = uid2has_think_correct.get(uid, False)
-                    #     if should_use_think and not has_think_correct:
-                    #         # print(f"UID {uid} should use think but has no think correct samples.")
-                    #         cnt = 0
-                    #         for idx in idxs:
-                    #             # add eight samples at most
-                    #             is_nothink = enforce_nothinking[idx].item() if torch.is_tensor(enforce_nothinking[idx]) else enforce_nothinking[idx]
-                    #             if not is_nothink:
-                    #                 if cnt < 8:
-                    #                     kept_sample_idxs.append(idx)
-                    #                     think_kept += 1
-                    #                     cnt += 1
-                    #                 else:
-                    #                     break
+                    for uid, idxs in uid2idxs.items():
+                        should_use_think = uid2should_use_think.get(uid, False)
+                        has_think_correct = uid2has_think_correct.get(uid, False)
+                        if should_use_think and not has_think_correct:
+                            # print(f"UID {uid} should use think but has no think correct samples.")
+                            cnt = 0
+                            for idx in idxs:
+                                # add eight samples at most
+                                is_nothink = enforce_nothinking[idx].item() if torch.is_tensor(enforce_nothinking[idx]) else enforce_nothinking[idx]
+                                if not is_nothink:
+                                    if cnt < 8:
+                                        kept_sample_idxs.append(idx)
+                                        think_kept += 1
+                                        cnt += 1
+                                    else:
+                                        break
 
                     # Filter samples based on kept_sample_idxs
                     if len(kept_sample_idxs) == 0:
@@ -1416,30 +1350,6 @@ class RayPPOTrainer:
                     else:
                         print(f"think_filtering: kept {len(kept_sample_idxs)} out of {len(new_batch)} samples")
                         print(f"keep think samples: {think_kept}, keep nothink samples: {nothink_kept}")
-
-                        # Add scaling factor to batch for advantage scaling in dp_actor
-                        # Map from UID to each sample index
-                        scaling_factors = []
-                        uids = new_batch.non_tensor_batch["uid"]
-                        for uid in uids:
-                            diff = float(uid2think_nothink_diff.get(uid, 0.0))
-                            nothink_acc = float(uid2nothink_pass_acc.get(uid, 0.0))
-                            scaling_factors.append(
-                                compute_advantage_scaling_factor(diff=diff, nothink_acc=nothink_acc)
-                            )
-                        new_batch.batch["advantage_scaling_factor"] = torch.tensor(
-                            scaling_factors, dtype=torch.float32
-                        )
-
-                        avg_diff = (
-                            sum(uid2think_nothink_diff.values()) / len(uid2think_nothink_diff)
-                            if len(uid2think_nothink_diff) > 0
-                            else 0.0
-                        )
-                        avg_scaling = sum(scaling_factors) / len(scaling_factors) if len(scaling_factors) > 0 else 0.0
-                        all_metrics["advantage_scaling/diff"].append(avg_diff)
-                        all_metrics["advantage_scaling/scaling_factor"].append(avg_scaling)
-
                         # Convert to tensor for proper indexing (list indexing returns DataProtoItem, not DataProto)
                         kept_sample_idxs = torch.tensor(kept_sample_idxs, dtype=torch.long)
                         new_batch = new_batch[kept_sample_idxs]
@@ -1447,96 +1357,6 @@ class RayPPOTrainer:
                         # Add filtering metrics
                         all_metrics["filtering/think_kept"].append(think_kept)
                         all_metrics["filtering/nothink_kept"].append(nothink_kept)
-
-            # Calculate scaling factors for advantage scaling even when think_filtering is disabled
-            # This allows advantage scaling to work independently of filtering
-            if self.config.algorithm.think_advantage_scaling and not self.config.algorithm.think_filtering:
-                # Compute reward if not already computed
-                if not self.config.algorithm.online_filtering:
-                    reward_tensor, reward_metrics = ray.get(self.reward_fn.compute_reward.remote(new_batch))
-                    new_batch.batch["token_level_scores"] = reward_tensor
-                    # Store accuracy for later use
-                    accuracy = reward_metrics.get("accuracy", [])
-                    if len(accuracy) > 0:
-                        new_batch.batch["accuracy"] = torch.tensor(accuracy, dtype=torch.float32)
-                    for k, v in reward_metrics.items():
-                        all_metrics[k].extend(v)
-
-                enforce_nothinking = new_batch.batch.get("enforce_nothinking", None)
-                accuracy = new_batch.batch.get("accuracy", None)
-
-                if accuracy is not None and enforce_nothinking is not None:
-                    if torch.is_tensor(accuracy):
-                        accuracy = accuracy.cpu().tolist()
-
-                    uids = new_batch.non_tensor_batch["uid"]
-
-                    # Group samples by uid and calculate accuracies
-                    uid2idxs = defaultdict(list)
-                    uid2nothink_acc = {}
-                    uid2think_acc = {}
-
-                    for idx, (uid, acc, is_nothink) in enumerate(zip(uids, accuracy, enforce_nothinking)):
-                        uid2idxs[uid].append(idx)
-
-                        if uid not in uid2nothink_acc:
-                            uid2nothink_acc[uid] = {'correct': 0, 'total': 0}
-                            uid2think_acc[uid] = {'correct': 0, 'total': 0}
-
-                        # Track accuracy by mode
-                        if is_nothink:
-                            uid2nothink_acc[uid]['total'] += 1
-                            if acc > 0:
-                                uid2nothink_acc[uid]['correct'] += 1
-                        else:
-                            uid2think_acc[uid]['total'] += 1
-                            if acc > 0:
-                                uid2think_acc[uid]['correct'] += 1
-
-                    # Calculate pass@k accuracy for each UID
-                    uid2nothink_pass_acc = {}
-                    for uid, acc_info in uid2nothink_acc.items():
-                        if acc_info['total'] > 0:
-                            uid2nothink_pass_acc[uid] = acc_info['correct'] / acc_info['total']
-                        else:
-                            uid2nothink_pass_acc[uid] = 0.0
-
-                    uid2think_pass_acc = {}
-                    for uid, acc_info in uid2think_acc.items():
-                        if acc_info['total'] > 0:
-                            uid2think_pass_acc[uid] = acc_info['correct'] / acc_info['total']
-                        else:
-                            uid2think_pass_acc[uid] = 0.0
-
-                    # Calculate think_nothink_diff for each UID
-                    uid2think_nothink_diff = {}
-                    for uid in uid2idxs.keys():
-                        nothink_pass_acc = uid2nothink_pass_acc[uid]
-                        think_pass_acc = uid2think_pass_acc[uid]
-                        think_nothink_diff = max(0.0, think_pass_acc - nothink_pass_acc)
-                        uid2think_nothink_diff[uid] = think_nothink_diff
-
-                    # Map scaling factor to each sample
-                    scaling_factors = []
-                    for uid in uids:
-                        diff = float(uid2think_nothink_diff.get(uid, 0.0))
-                        nothink_acc = float(uid2nothink_pass_acc.get(uid, 0.0))
-                        scaling_factors.append(
-                            compute_advantage_scaling_factor(diff=diff, nothink_acc=nothink_acc)
-                        )
-                    new_batch.batch["advantage_scaling_factor"] = torch.tensor(
-                        scaling_factors, dtype=torch.float32
-                    )
-
-                    # Add metrics for monitoring
-                    avg_diff = (
-                        sum(uid2think_nothink_diff.values()) / len(uid2think_nothink_diff)
-                        if len(uid2think_nothink_diff) > 0
-                        else 0.0
-                    )
-                    avg_scaling = sum(scaling_factors) / len(scaling_factors) if len(scaling_factors) > 0 else 0.0
-                    all_metrics["advantage_scaling/diff"].append(avg_diff)
-                    all_metrics["advantage_scaling/scaling_factor"].append(avg_scaling)
 
             batch = DataProto.concat([batch, new_batch]) if batch is not None else new_batch
 
