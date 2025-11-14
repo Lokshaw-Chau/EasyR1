@@ -1265,46 +1265,46 @@ class RayPPOTrainer:
                     # Add samples to replay buffer after additional rollout
                     # Calculate variance for all UIDs and add to buffer if they have think correct
                     samples_added = 0
-                    # for uid in uid2idxs.keys():
-                    #     if uid2has_think_correct[uid] and uid2should_use_think[uid]:
-                    #         # Collect think accuracies for this UID
-                    #         think_accs = []
-                    #         for idx in uid2idxs[uid]:
-                    #             is_nothink = enforce_nothinking[idx].item() if torch.is_tensor(enforce_nothinking[idx]) else enforce_nothinking[idx]
-                    #             if accuracy is not None:
-                    #                 acc = accuracy[idx]
-                    #                 if not is_nothink:
-                    #                     think_accs.append(acc)
+                    for uid in uid2idxs.keys():
+                        if uid2has_think_correct[uid] and uid2should_use_think[uid]:
+                            # Collect think accuracies for this UID
+                            think_accs = []
+                            for idx in uid2idxs[uid]:
+                                is_nothink = enforce_nothinking[idx].item() if torch.is_tensor(enforce_nothinking[idx]) else enforce_nothinking[idx]
+                                if accuracy is not None:
+                                    acc = accuracy[idx]
+                                    if not is_nothink:
+                                        think_accs.append(acc)
 
-                    #         # Calculate variance of think accuracies in current rollout
-                    #         if len(think_accs) > 0:
-                    #             think_acc_variance = np.var(think_accs[0:8])  # Only consider first 8 think samples
+                            # Calculate variance of think accuracies in current rollout
+                            if len(think_accs) > 0:
+                                think_acc_variance = np.var(think_accs[0:8])  # Only consider first 8 think samples
 
-                    #             # Get gen_batch and original_batch for this UID
-                    #             gen_batch_to_add = None
-                    #             original_batch_to_add = None
+                                # Get gen_batch and original_batch for this UID
+                                gen_batch_to_add = None
+                                original_batch_to_add = None
 
-                    #             # Check if this UID came from buffer sampling
-                    #             if uid in all_buffer_uid_to_problem:
-                    #                 # This UID came from buffer, use the saved problem
-                    #                 gen_batch_to_add, original_batch_to_add = all_buffer_uid_to_problem[uid]
-                    #             else:
-                    #                 # This UID is from original data, extract from gen_batch_for_additional_rollouts
-                    #                 # Find the index in the original batch (before repeat)
-                    #                 first_idx = uid2idxs[uid][0]
-                    #                 original_idx = first_idx // self.config.worker.rollout.n
+                                # Check if this UID came from buffer sampling
+                                if uid in all_buffer_uid_to_problem:
+                                    # This UID came from buffer, use the saved problem
+                                    gen_batch_to_add, original_batch_to_add = all_buffer_uid_to_problem[uid]
+                                else:
+                                    # This UID is from original data, extract from gen_batch_for_additional_rollouts
+                                    # Find the index in the original batch (before repeat)
+                                    first_idx = uid2idxs[uid][0]
+                                    original_idx = first_idx // self.config.worker.rollout.n
 
-                    #                 # Extract single sample from gen_batch and original_batch
-                    #                 gen_batch_to_add = gen_batch_for_additional_rollouts[original_idx:original_idx+1]
-                    #                 original_batch_to_add = original_batch_for_additional_rollouts[original_idx:original_idx+1]
+                                    # Extract single sample from gen_batch and original_batch
+                                    gen_batch_to_add = gen_batch_for_additional_rollouts[original_idx:original_idx+1]
+                                    original_batch_to_add = original_batch_for_additional_rollouts[original_idx:original_idx+1]
 
-                    #             # Add to buffer with updated think_acc_variance
-                    #             if gen_batch_to_add is not None and original_batch_to_add is not None:
-                    #                 added_count = self._add_to_think_buffer(
-                    #                     gen_batch_to_add, original_batch_to_add, uid, think_acc_variance
-                    #                 )
-                    #                 if added_count > 0:
-                    #                     samples_added += added_count
+                                # Add to buffer with updated think_acc_variance
+                                if gen_batch_to_add is not None and original_batch_to_add is not None:
+                                    added_count = self._add_to_think_buffer(
+                                        gen_batch_to_add, original_batch_to_add, uid, think_acc_variance
+                                    )
+                                    if added_count > 0:
+                                        samples_added += added_count
                     all_metrics["replay/samples_added"].append(samples_added)
                     print(f"think_filtering: Added {samples_added} samples to replay buffer")
                     # Filter based on should_use_think decision with balanced selection
