@@ -129,9 +129,11 @@ class FSDPWorker(Worker):
         self.ulysses_sharding_manager = FSDPUlyssesShardingManager(self.ulysses_device_mesh)
 
         # validate and normalize config
-        if self.config.rollout.n > 1:
-            config.global_batch_size *= self.config.rollout.n
-            self.print_rank0(f"{role} will use global batch size {config.global_batch_size}.")
+        # Use effective_rollout_n if available (for think_filtering), otherwise use rollout.n
+        effective_rollout_n = getattr(config, 'effective_rollout_n', self.config.rollout.n)
+        if effective_rollout_n > 1:
+            config.global_batch_size *= effective_rollout_n
+            self.print_rank0(f"{role} will use global batch size {config.global_batch_size} (effective_rollout_n={effective_rollout_n}).")
 
         config.global_batch_size_per_device = config.global_batch_size // (world_size // config.ulysses_size)
         if config.global_batch_size_per_device == 0:

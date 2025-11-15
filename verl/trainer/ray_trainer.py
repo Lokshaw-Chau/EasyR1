@@ -235,6 +235,19 @@ class RayPPOTrainer:
         ):
             raise ValueError("GRPO and RLOO algorithm need `config.worker.rollout.n > 1`.")
 
+        # Validate think_filtering compatibility with GRPO/RLOO
+        if getattr(config.algorithm, 'think_filtering', False):
+            effective_n = config.worker.rollout.n // 2
+            if (
+                config.algorithm.adv_estimator in (AdvantageEstimator.GRPO, AdvantageEstimator.RLOO)
+                and effective_n <= 1
+            ):
+                raise ValueError(
+                    f"When think_filtering is enabled, effective_n (rollout.n // 2) must be > 1 for GRPO/RLOO. "
+                    f"Current rollout.n={config.worker.rollout.n}, effective_n={effective_n}. "
+                    f"Please set rollout.n >= 4."
+                )
+
         if config.trainer.max_steps is not None:
             self.training_steps = config.trainer.max_steps
         elif config.data.mini_rollout_batch_size is not None:
@@ -246,6 +259,16 @@ class RayPPOTrainer:
         config.worker.actor.optim.training_steps = self.training_steps
         config.worker.critic.optim.training_steps = self.training_steps
         print(f"Total training steps: {self.training_steps}")
+
+        # Log warning if think_filtering is enabled and adjust effective_n
+        if getattr(config.algorithm, 'think_filtering', False):
+            effective_n = config.worker.rollout.n // 2
+            print(f"WARNING: think_filtering is enabled. Effective rollout.n will be {effective_n} (original: {config.worker.rollout.n})")
+            print(f"         Actual batch size per step: {config.data.rollout_batch_size} * {effective_n} = {config.data.rollout_batch_size * effective_n}")
+            # Store effective_n in actor config for batch size calculation
+            config.worker.actor.effective_rollout_n = effective_n
+        else:
+            config.worker.actor.effective_rollout_n = config.worker.rollout.n
 
     def init_workers(self) -> None:
         """Init resource pool and worker group"""
@@ -493,6 +516,12 @@ class RayPPOTrainer:
                 meta_info_keys=["min_pixels", "max_pixels", "video_fps"],
             )
 
+            # Set dynamic n for generation
+            intervention_think_n = self.config.worker.rollout.intervention_think_n
+            intervention_nothink_n = self.config.worker.rollout.intervention_no_think_n
+            gen_batch.meta_info["intervention_think_n"] = intervention_think_n
+            gen_batch.meta_info["intervention_nothink_n"] = intervention_nothink_n
+
             # generate a batch
             gen_batch_output = self.actor_rollout_ref_wg.generate_sequences(gen_batch)
 
@@ -539,8 +568,79 @@ class RayPPOTrainer:
 
                 new_batch = new_batch[kept_sample_idxs]
 
+            # think_filtering: filter based on nothink correctness
+            if getattr(self.config.algorithm, 'think_filtering', False):
+                # Compute reward if not already computed by online_filtering
+                if not self.config.algorithm.online_filtering:
+                    reward_tensor, reward_metrics = ray.get(self.reward_fn.compute_reward.remote(new_batch))
+                    new_batch.batch["token_level_scores"] = reward_tensor
+                    # Store accuracy for later filtering use
+                    accuracy = reward_metrics.get("accuracy", [])
+                    if len(accuracy) > 0:
+                        new_batch.batch["accuracy"] = torch.tensor(accuracy, dtype=torch.float32)
+                    for k, v in reward_metrics.items():
+                        all_metrics[k].extend(v)
+
+                enforce_nothinking = new_batch.batch.get("enforce_nothinking", None)
+                accuracy = reward_metrics.get("accuracy", [])
+
+                if len(accuracy) > 0 and enforce_nothinking is not None:
+                    uids = new_batch.non_tensor_batch["uid"]
+
+                    # Group samples by uid and track correct samples
+                    uid2idxs = defaultdict(list)
+                    uid2has_nothink_correct = {}
+                    uid2has_think_correct = {}
+
+                    for idx, (uid, acc, is_nothink) in enumerate(zip(uids, accuracy, enforce_nothinking)):
+                        uid2idxs[uid].append(idx)
+
+                        # Initialize tracking for this uid
+                        if uid not in uid2has_nothink_correct:
+                            uid2has_nothink_correct[uid] = False
+                            uid2has_think_correct[uid] = False
+
+                        # Track nothink correct samples
+                        if is_nothink and acc > 0:
+                            uid2has_nothink_correct[uid] = True
+                        # Track think correct samples
+                        if not is_nothink and acc > 0:
+                            uid2has_think_correct[uid] = True
+
+
+                    # Filter samples: keep think samples only if no nothink correct
+                    kept_sample_idxs = []
+                    think_kept = 0
+                    nothink_kept = 0
+
+                    for uid, idxs in uid2idxs.items():
+                        has_nothink_correct = uid2has_nothink_correct[uid]
+
+                        if not has_nothink_correct:
+                            # No nothink correct - keep think samples (up to 8 per uid)
+                            cnt = 0
+                            for idx in idxs:
+                                is_nothink = enforce_nothinking[idx].item() if torch.is_tensor(enforce_nothinking[idx]) else enforce_nothinking[idx]
+                                if not is_nothink and cnt < 8:
+                                    kept_sample_idxs.append(idx)
+                                    think_kept += 1
+                                    cnt += 1
+
+                    if len(kept_sample_idxs) > 0:
+                        print(f"think_filtering: kept {len(kept_sample_idxs)} think samples (think: {think_kept}, nothink: {nothink_kept}) out of {len(new_batch)} total samples")
+                        kept_sample_idxs = torch.tensor(kept_sample_idxs, dtype=torch.long)
+                        new_batch = new_batch[kept_sample_idxs]
+                    else:
+                        print("Warning: No sample kept after think_filtering. Skipping filtering for this batch.")
+
             batch = DataProto.concat([batch, new_batch]) if batch is not None else new_batch
-            current_batch_size = len(batch) // self.config.worker.rollout.n
+
+            # Calculate effective_n for batch size computation
+            effective_n = self.config.worker.rollout.n
+            if getattr(self.config.algorithm, 'think_filtering', False):
+                effective_n = max(1, self.config.worker.rollout.n // 2)
+
+            current_batch_size = len(batch) // effective_n
             rollout_batch_size = self.config.data.rollout_batch_size
             if current_batch_size < rollout_batch_size:
                 print(f"{current_batch_size=} < {rollout_batch_size=}")
@@ -553,10 +653,10 @@ class RayPPOTrainer:
                     )
             else:
                 print(f"{current_batch_size=} >= {rollout_batch_size=}. Finish generating.")
-                if self.config.algorithm.online_filtering:
+                if self.config.algorithm.online_filtering or getattr(self.config.algorithm, 'think_filtering', False):
                     metrics.update({f"reward/{k}": v for k, v in reduce_metrics(all_metrics).items()})
 
-                return batch[: self.config.data.rollout_batch_size * self.config.worker.rollout.n]
+                return batch[: self.config.data.rollout_batch_size * effective_n]
 
     def fit(self):
         """
@@ -628,8 +728,9 @@ class RayPPOTrainer:
                         # get token level scores asynchronously
                         reward_tensor, reward_metrics = ray.get(reward_ref)
                         batch.batch["token_level_scores"] = reward_tensor
-                        reward_metrics = {f"reward/{k}": v for k, v in reduce_metrics(reward_metrics).items()}
-                        metrics.update(reward_metrics)
+                        if not self.config.algorithm.online_filtering and not self.config.algorithm.think_filtering:
+                            reward_metrics_reduced = {f"reward/{k}": v for k, v in reduce_metrics(reward_metrics).items()}
+                            metrics.update(reward_metrics_reduced)
 
                     # apply kl penalty if available
                     if not self.config.algorithm.use_kl_loss and self.use_reference_policy:

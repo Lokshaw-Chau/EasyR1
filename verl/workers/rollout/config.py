@@ -43,6 +43,9 @@ class RolloutConfig:
     prompt_length: int = field(default=-1, init=False)
     response_length: int = field(default=-1, init=False)
     trust_remote_code: bool = field(default=False, init=False)
+    rollout_intervention: str = field(default="none", init=False)
+    intervention_think_n: int = field(default=0, init=False)
+    intervention_no_think_n: int = field(default=0, init=False)
 
     def to_dict(self):
         return asdict(self)

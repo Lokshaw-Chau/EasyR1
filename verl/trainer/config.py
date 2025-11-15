@@ -101,6 +101,8 @@ class AlgorithmConfig:
     """filter out low reward samples if online filtering"""
     filter_high: float = 0.99
     """filter out high reward samples if online filtering"""
+    think_filtering: bool = False
+    """use think filtering"""
 
 
 @dataclass
