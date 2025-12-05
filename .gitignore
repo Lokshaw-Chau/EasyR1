@@ -187,3 +187,7 @@ images*
 _*.sh
 _*.sh
 _*.yaml
+_*.ipynb
+data2
+
+validation/**/*.json
