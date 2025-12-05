@@ -63,24 +63,24 @@ def calculate_f1_score(predicted_str, ground_truth_str):
     
 def r1gui_format_reward(predict_str: str, ground_truth: str) -> float:
     """
-    检查 predict_str 是否符合 <thinking></thinking><tool_call></tool_call> 的格式，
+    检查 predict_str 是否符合 Thought:, Action: <tool_call></tool_call> 的格式，
     并验证 <tool_call> 中的内容是否符合正确的 JSON 格式和动作要求。
     """
     # 检查 <thinking> 和 <tool_call> 的外部结构
-    outer_pattern_1 = re.compile(r"Thought:.*?\s*<tool_call>.*?</tool_call>", re.DOTALL)
-    outer_pattern_2 = re.compile(r"<tool_call>.*?</tool_call>", re.DOTALL)
+    outer_pattern_1 = re.compile(r"Thought:.*?\s*Action:.*?\s<tool_call>.*?</tool_call>", re.DOTALL)
+    outer_pattern_2 = re.compile(r"Action:.*?\s<tool_call>.*?</tool_call>", re.DOTALL)
     if not re.fullmatch(outer_pattern_1, predict_str) and not re.fullmatch(outer_pattern_2, predict_str):
         return 0.0
 
-    if '<thinking>' in predict_str and not re.fullmatch(outer_pattern_1, predict_str):
-        return 0.0
+    # if '<thinking>' in predict_str and not re.fullmatch(outer_pattern_1, predict_str):
+    #     return 0.0
 
     # 使用 JSON 解析提取 tool_call 内容
     parsed_args = extract_tool_call_json(predict_str)
     if parsed_args is None:
         return 0.0
 
-    ui_type = json.loads(ground_truth).get("ui_type", "android_control")
+    # ui_type = json.loads(ground_truth).get("ui_type", "android_control")
     try:
         # 获取 action
         pred_action = parsed_args.get("action")
@@ -88,17 +88,17 @@ def r1gui_format_reward(predict_str: str, ground_truth: str) -> float:
             return 0.0
 
         # 验证 action 是否符合 ui_type 要求
-        if ui_type == "android_control":
-            if pred_action not in ['click', 'long_press', 'swipe', 'type', 'system_button', 'open', 'wait']:
-                return 0.0
+        # if ui_type == "android_control":
+        #     if pred_action not in ['click', 'long_press', 'swipe', 'type', 'system_button', 'open', 'wait']:
+        #         return 0.0
 
-        if ui_type == "gui_odyssey":
-            if pred_action not in ['click', 'long_press', 'swipe', 'type', 'system_button', 'terminate']:
-                return 0.0
+        # if ui_type == "gui_odyssey":
+        #     if pred_action not in ['click', 'long_press', 'swipe', 'type', 'system_button', 'terminate']:
+        #         return 0.0
 
-        if ui_type == "agentnetbench":
-            if pred_action not in ['key', 'type', 'mouse_move', 'left_click', 'right_click', 'double_click', 'scroll', 'terminate', 'left_click_drag']:
-                return 0.0
+        # if ui_type == "agentnetbench":
+        #     if pred_action not in ['key', 'type', 'mouse_move', 'left_click', 'right_click', 'double_click', 'scroll', 'terminate', 'left_click_drag']:
+        #         return 0.0
 
         # 验证必需的参数
         if pred_action in ['click', 'long_press', 'mouse_move', 'left_click', 'right_click', 'double_click', 'left_click_drag']:
@@ -148,7 +148,7 @@ def r1gui_accuracy_reward(predict_str: str, ground_truth: str) -> float:
         gt_action=ground_truth['action'].lower()
         gt_bbox=ground_truth['gt_bbox']
         gt_input_text=ground_truth['input_text']
-        ui_type = ground_truth["ui_type"]
+        # ui_type = ground_truth["ui_type"]
 
         # 使用 JSON 解析提取预测内容
         parsed_args = extract_tool_call_json(predict_str)
@@ -165,15 +165,15 @@ def r1gui_accuracy_reward(predict_str: str, ground_truth: str) -> float:
             return 0.0
 
         # 验证 action 是否符合 ui_type 要求
-        if ui_type == "android_control":
-            if pred_action not in ['click', 'long_press', 'swipe', 'type', 'system_button', 'open', 'wait']:
-                return 0.0
-        if ui_type == "gui_odyssey":
-            if pred_action not in ['click', 'long_press', 'swipe', 'type', 'system_button', 'terminate']:
-                return 0.0
-        if ui_type == "agentnetbench":
-            if pred_action not in ['key', 'type', 'mouse_move', 'left_click', 'right_click', 'double_click', 'scroll', 'terminate', 'left_click_drag']:
-                return 0.0
+        # if ui_type == "android_control":
+        #     if pred_action not in ['click', 'long_press', 'swipe', 'type', 'system_button', 'open', 'wait']:
+        #         return 0.0
+        # if ui_type == "gui_odyssey":
+        #     if pred_action not in ['click', 'long_press', 'swipe', 'type', 'system_button', 'terminate']:
+        #         return 0.0
+        # if ui_type == "agentnetbench":
+        #     if pred_action not in ['key', 'type', 'mouse_move', 'left_click', 'right_click', 'double_click', 'scroll', 'terminate', 'left_click_drag']:
+        #         return 0.0
 
         # 验证参数准确性
         if gt_action in ["click", "long_press", "mouse_move", "left_click", "right_click", "double_click", "left_click_drag"]:
@@ -181,7 +181,7 @@ def r1gui_accuracy_reward(predict_str: str, ground_truth: str) -> float:
             if pred_bbox is None or not isinstance(pred_bbox, list) or len(pred_bbox) != 2:
                 return 0.0
             if len(gt_bbox)==2:
-                if ((pred_bbox[0]-gt_bbox[0])/ground_truth['image_size'][0])**2+((pred_bbox[1]-gt_bbox[1])/ground_truth['image_size'][1])**2 < 0.14**2:
+                if ((pred_bbox[0]-gt_bbox[0]))**2+((pred_bbox[1]-gt_bbox[1]))**2 < 0.14**2:
                     return 1.0
                 else:
                     return 0.0
@@ -260,27 +260,6 @@ def r1gui_accuracy_reward(predict_str: str, ground_truth: str) -> float:
     except Exception as e:
         print(f"Error in accuracy reward calculation: {e}")
         return 0.0
-    
-def _compute_score(predict_str: str, ground_truth: str, think_ratio: float = 1.0, training_progress: float = None):
-    format = r1gui_format_reward(predict_str, ground_truth)
-    accuracy = r1gui_accuracy_reward(predict_str, ground_truth)
-    
-    # Calculate base score
-    base_score = accuracy + format
-    mode_ratio = think_ratio if "Thought:" in predict_str else 1 - think_ratio
-    scale_factor = 1 / mode_ratio
-    # Apply progressive scaling based on training progress
-    overall_score = base_score
-
-    return {
-        "overall": overall_score,
-        "format": format,
-        "accuracy": accuracy,
-        "think_ratio": 1.0 if "<thinking>" in predict_str else 0.0,
-        "training_progress": training_progress if training_progress is not None else 0.0,
-        "think_acc": accuracy*scale_factor if "<thinking>" in predict_str else 0.0,
-        "no_think_acc": accuracy*scale_factor if "<thinking>" not in predict_str else 0.0,
-    }
 
 def think_ratio(predict_strs: list[str]):
     """
@@ -295,40 +274,18 @@ def think_ratio(predict_strs: list[str]):
     return think_count / total_count
 
 def _pass_at_accracy_for_each_query(scores, ground_truths):
-    gt2think_acc = {}
-    gt2nothink_acc = {}
     gt2acc = {}
     for i, score in enumerate(scores):
         ground_truth = ground_truths[i]
-        if ground_truth not in gt2think_acc:
-            gt2think_acc[ground_truth] = []
-            gt2nothink_acc[ground_truth] = []
+        if ground_truth not in gt2acc:
             gt2acc[ground_truth] = []
             
-        if score["think_ratio"] > 0.5:
-            gt2think_acc[ground_truth].append(score["think_acc"])
-        else:
-            gt2nothink_acc[ground_truth].append(score["no_think_acc"])
         
         gt2acc[ground_truth].append(score["accuracy"])
     
     for i, score in enumerate(scores):
-        think_acc = max(gt2think_acc[ground_truths[i]]) if len(gt2think_acc[ground_truths[i]]) != 0 else 0
-        pass_at_1_acc_think = gt2think_acc[ground_truths[i]][0] if len(gt2think_acc[ground_truths[i]]) != 0 else 0
-        no_think_acc = max(gt2nothink_acc[ground_truths[i]]) if len(gt2nothink_acc[ground_truths[i]]) != 0 else 0
-        pass_at_1_acc_nothink = gt2nothink_acc[ground_truths[i]][0] if len(gt2nothink_acc[ground_truths[i]]) != 0 else 0
         total_acc = max(gt2acc[ground_truths[i]])
         score["pass_at_accuracy"] = total_acc
-        if score["think_ratio"] > 0.5:
-            score["think_pass_at_accuracy"] = think_acc
-            score["think_pass_at_1_accuracy"] = pass_at_1_acc_think
-            score["nothink_pass_at_1_accuracy"] = 0.0
-            score["nothink_pass_at_accuracy"] = 0.0
-        else:
-            score["nothink_pass_at_accuracy"] = no_think_acc
-            score["nothink_pass_at_1_accuracy"] = pass_at_1_acc_nothink
-            score["think_pass_at_1_accuracy"] = 0.0
-            score["think_pass_at_accuracy"] = 0.0
     return scores
 
 def compute_score(reward_input: list[dict[str, Any]], format_weight: float = 0.5) -> dict[str, float]:
@@ -339,9 +296,18 @@ def compute_score(reward_input: list[dict[str, Any]], format_weight: float = 0.5
     
     predict_strs = [item["response"] for item in reward_input]
     ground_truths = [item["ground_truth"] for item in reward_input]
-    current_think_ratio = think_ratio(predict_strs)
+    
+    # current_think_ratio = think_ratio(predict_strs)
     for predict_str, ground_truth in zip(predict_strs, ground_truths):
-        scores.append(_compute_score(predict_str, ground_truth, current_think_ratio, None))
+        format_score = r1gui_format_reward(predict_str, ground_truth)
+        accuracy_score = r1gui_accuracy_reward(predict_str, ground_truth)
+        scores.append(
+            {
+                "overall": (1 - format_weight) * accuracy_score + format_weight * format_score if format_score > 0 else 0.0,
+                "format": format_score,
+                "accuracy": accuracy_score,
+            }
+        )
 
     scores = _pass_at_accracy_for_each_query(scores, ground_truths)
 
@@ -349,99 +315,240 @@ def compute_score(reward_input: list[dict[str, Any]], format_weight: float = 0.5
 
 if __name__ == "__main__":
     # Test cases for all action types across different ui_types
-    pr = [
-        # 1. click (android_control) - with thinking
-        "<thinking>I need to click the button</thinking>\n<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"click\", \"coordinate\": [540, 960]}}</tool_call>",
-        # 2. click (android_control) - without thinking
-        "<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"click\", \"coordinate\": [540, 960]}}</tool_call>",
-        # 3. long_press (android_control)
-        "<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"long_press\", \"coordinate\": [100, 200]}}</tool_call>",
-        # 4. swipe (android_control)
-        "<thinking>Swipe down to scroll</thinking>\n<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"swipe\", \"coordinate\": [540, 500], \"coordinate2\": [540, 1200]}}</tool_call>",
-        # 5. type (android_control)
-        "<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"type\", \"text\": \"hello world\"}}</tool_call>",
-        # 6. system_button (android_control)
-        "<thinking>I need to go back</thinking>\n<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"system_button\", \"button\": \"Back\"}}</tool_call>",
-        # 7. open (android_control)
-        "<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"open\", \"text\": \"com.example.app\"}}</tool_call>",
-        # 8. wait (android_control)
-        "<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"wait\"}}</tool_call>",
-        # 9. terminate (gui_odyssey)
-        "<thinking>Task completed</thinking>\n<tool_call>\n{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"terminate\", \"status\": \"success\"}}</tool_call>",
-        # 10. mouse_move (agentnetbench)
-        "<tool_call>\n{\"name\": \"computer\", \"arguments\": {\"action\": \"mouse_move\", \"coordinate\": [800, 600]}}</tool_call>",
-        # 11. left_click (agentnetbench)
-        "<thinking>Click the element</thinking>\n<tool_call>\n{\"name\": \"computer\", \"arguments\": {\"action\": \"left_click\", \"coordinate\": [800, 600]}}</tool_call>",
-        # 12. right_click (agentnetbench)
-        "<tool_call>\n{\"name\": \"computer\", \"arguments\": {\"action\": \"right_click\", \"coordinate\": [800, 600]}}</tool_call>",
-        # 13. double_click (agentnetbench)
-        "<tool_call>\n{\"name\": \"computer\", \"arguments\": {\"action\": \"double_click\", \"coordinate\": [800, 600]}}</tool_call>",
-        # 14. key (agentnetbench)
-        "<thinking>Press enter key</thinking>\n<tool_call>\n{\"name\": \"computer\", \"arguments\": {\"action\": \"key\", \"keys\": \"Return\"}}</tool_call>",
-        # 15. scroll (agentnetbench)
-        "<tool_call>\n{\"name\": \"computer\", \"arguments\": {\"action\": \"scroll\"}}</tool_call>",
-        # 16. left_click_drag (agentnetbench)
-        "<tool_call>\n{\"name\": \"computer\", \"arguments\": {\"action\": \"left_click_drag\", \"coordinate\": [100, 100]}}</tool_call>",
+    print("=" * 80)
+    print("Testing GUI Reward Function")
+    print("=" * 80)
+
+    # Test Case 1: android_control - click action (correct)
+    test_cases = [
+        {
+            "name": "android_control - click (correct format & accuracy)",
+            "predict": 'Thought: I need to click on the button.\nAction: Click the button at center.\n<tool_call>\n{"name": "mobile_use", "arguments": {"action": "click", "coordinate": [500, 300]}}\n</tool_call>',
+            "ground_truth": json.dumps({
+                "action": "click",
+                "gt_bbox": [400, 200, 600, 400],  # bbox format: [x1, y1, x2, y2]
+                "input_text": "",
+                "ui_type": "android_control"
+            }),
+            "expected_format": 1.0,
+            "expected_accuracy": 1.0
+        },
+        {
+            "name": "android_control - click (correct format, wrong coordinate)",
+            "predict": 'Thought: I need to click on the button.\nAction: Click the button.\n<tool_call>\n{"name": "mobile_use", "arguments": {"action": "click", "coordinate": [100, 100]}}\n</tool_call>',
+            "ground_truth": json.dumps({
+                "action": "click",
+                "gt_bbox": [400, 200, 600, 400],
+                "input_text": "",
+                "ui_type": "android_control"
+            }),
+            "expected_format": 1.0,
+            "expected_accuracy": 0.0
+        },
+        {
+            "name": "android_control - type action (correct)",
+            "predict": 'Thought: I should type the text.\nAction: Type "Hello World".\n<tool_call>\n{"name": "mobile_use", "arguments": {"action": "type", "text": "Hello World"}}\n</tool_call>',
+            "ground_truth": json.dumps({
+                "action": "type",
+                "gt_bbox": [],
+                "input_text": "Hello World",
+                "ui_type": "android_control"
+            }),
+            "expected_format": 1.0,
+            "expected_accuracy": 1.0
+        },
+        {
+            "name": "android_control - swipe action (correct)",
+            "predict": 'Thought: Swipe up to scroll.\nAction: Swipe upward.\n<tool_call>\n{"name": "mobile_use", "arguments": {"action": "swipe", "coordinate": [500, 800], "coordinate2": [500, 200]}}\n</tool_call>',
+            "ground_truth": json.dumps({
+                "action": "swipe",
+                "gt_bbox": [],
+                "input_text": "up",
+                "ui_type": "android_control"
+            }),
+            "expected_format": 1.0,
+            "expected_accuracy": 1.0
+        },
+        {
+            "name": "android_control - swipe (wrong direction)",
+            "predict": 'Thought: Swipe down.\nAction: Swipe downward.\n<tool_call>\n{"name": "mobile_use", "arguments": {"action": "swipe", "coordinate": [500, 200], "coordinate2": [500, 800]}}\n</tool_call>',
+            "ground_truth": json.dumps({
+                "action": "swipe",
+                "gt_bbox": [],
+                "input_text": "up",
+                "ui_type": "android_control"
+            }),
+            "expected_format": 1.0,
+            "expected_accuracy": 0.0
+        },
+        {
+            "name": "gui_odyssey - terminate action (correct)",
+            "predict": 'Thought: Task completed successfully.\nAction: Terminate with success.\n<tool_call>\n{"name": "mobile_use", "arguments": {"action": "terminate", "status": "success"}}\n</tool_call>',
+            "ground_truth": json.dumps({
+                "action": "terminate",
+                "gt_bbox": [],
+                "input_text": "success",
+                "ui_type": "gui_odyssey"
+            }),
+            "expected_format": 1.0,
+            "expected_accuracy": 1.0
+        },
+        {
+            "name": "agentnetbench - left_click action (correct)",
+            "predict": 'Thought: Click on the element.\nAction: Perform left click.\n<tool_call>\n{"name": "computer_use", "arguments": {"action": "left_click", "coordinate": [640, 480]}}\n</tool_call>',
+            "ground_truth": json.dumps({
+                "action": "left_click",
+                "gt_bbox": [600, 450, 680, 510],
+                "input_text": "",
+                "ui_type": "agentnetbench"
+            }),
+            "expected_format": 1.0,
+            "expected_accuracy": 1.0
+        },
+        {
+            "name": "agentnetbench - key action (correct)",
+            "predict": 'Thought: Press Enter key.\nAction: Press Enter.\n<tool_call>\n{"name": "computer_use", "arguments": {"action": "key", "keys": ["Return"]}}\n</tool_call>',
+            "ground_truth": json.dumps({
+                "action": "key",
+                "gt_bbox": [],
+                "input_text": "Return",
+                "ui_type": "agentnetbench"
+            }),
+            "expected_format": 1.0,
+            "expected_accuracy": 1.0
+        },
+        {
+            "name": "Format error - missing Thought",
+            "predict": 'Action: Click the button.\n<tool_call>\n{"name": "mobile_use", "arguments": {"action": "click", "coordinate": [500, 300]}}\n</tool_call>',
+            "ground_truth": json.dumps({
+                "action": "click",
+                "gt_bbox": [400, 200, 600, 400],
+                "input_text": "",
+                "ui_type": "android_control"
+            }),
+            "expected_format": 0.0,
+            "expected_accuracy": None  # Won't be calculated if format is wrong
+        },
+        {
+            "name": "Format error - missing Action",
+            "predict": 'Thought: I need to click.\n<tool_call>\n{"name": "mobile_use", "arguments": {"action": "click", "coordinate": [500, 300]}}\n</tool_call>',
+            "ground_truth": json.dumps({
+                "action": "click",
+                "gt_bbox": [400, 200, 600, 400],
+                "input_text": "",
+                "ui_type": "android_control"
+            }),
+            "expected_format": 0.0,
+            "expected_accuracy": None
+        },
+        {
+            "name": "Format error - invalid JSON",
+            "predict": 'Thought: Click button.\nAction: Perform click.\n<tool_call>\n{"name": "mobile_use", "arguments": {"action": "click", "coordinate": [500 300]}}\n</tool_call>',
+            "ground_truth": json.dumps({
+                "action": "click",
+                "gt_bbox": [400, 200, 600, 400],
+                "input_text": "",
+                "ui_type": "android_control"
+            }),
+            "expected_format": 0.0,
+            "expected_accuracy": None
+        },
+        {
+            "name": "Format error - missing required parameter (coordinate)",
+            "predict": 'Thought: Click button.\nAction: Perform click.\n<tool_call>\n{"name": "mobile_use", "arguments": {"action": "click"}}\n</tool_call>',
+            "ground_truth": json.dumps({
+                "action": "click",
+                "gt_bbox": [400, 200, 600, 400],
+                "input_text": "",
+                "ui_type": "android_control"
+            }),
+            "expected_format": 0.0,
+            "expected_accuracy": None
+        },
+        {
+            "name": "Format error - invalid action for ui_type",
+            "predict": 'Thought: Use keyboard.\nAction: Press key.\n<tool_call>\n{"name": "mobile_use", "arguments": {"action": "key", "keys": ["Return"]}}\n</tool_call>',
+            "ground_truth": json.dumps({
+                "action": "key",
+                "gt_bbox": [],
+                "input_text": "Return",
+                "ui_type": "android_control"  # android_control doesn't support 'key' action
+            }),
+            "expected_format": 0.0,
+            "expected_accuracy": None
+        },
     ]
 
-    gt = [
-        # 1. click - exact match
-        json.dumps({"action": "click", "gt_bbox": [540, 960], "input_text": "", "image_size": [1080, 1920], "ui_type": "android_control"}),
-        # 2. click - exact match
-        json.dumps({"action": "click", "gt_bbox": [540, 960], "input_text": "", "image_size": [1080, 1920], "ui_type": "android_control"}),
-        # 3. long_press - within bbox
-        json.dumps({"action": "long_press", "gt_bbox": [50, 150, 150, 250], "input_text": "", "image_size": [1080, 1920], "ui_type": "android_control"}),
-        # 4. swipe - direction down
-        json.dumps({"action": "swipe", "gt_bbox": [-1, -1], "input_text": "down", "image_size": [1080, 1920], "ui_type": "android_control"}),
-        # 5. type - text match
-        json.dumps({"action": "type", "gt_bbox": [-1, -1], "input_text": "hello world", "image_size": [1080, 1920], "ui_type": "android_control"}),
-        # 6. system_button - button match
-        json.dumps({"action": "system_button", "gt_bbox": [-1, -1], "input_text": "Back", "image_size": [1080, 1920], "ui_type": "android_control"}),
-        # 7. open - app match
-        json.dumps({"action": "open", "gt_bbox": [-1, -1], "input_text": "com.example.app", "image_size": [1080, 1920], "ui_type": "android_control"}),
-        # 8. wait - always passes
-        json.dumps({"action": "wait", "gt_bbox": [-1, -1], "input_text": "", "image_size": [1080, 1920], "ui_type": "android_control"}),
-        # 9. terminate - status match
-        json.dumps({"action": "terminate", "gt_bbox": [-1, -1], "input_text": "success", "image_size": [1920, 1080], "ui_type": "gui_odyssey"}),
-        # 10. mouse_move - coordinate match
-        json.dumps({"action": "mouse_move", "gt_bbox": [800, 600], "input_text": "", "image_size": [1920, 1080], "ui_type": "agentnetbench"}),
-        # 11. left_click - coordinate match
-        json.dumps({"action": "left_click", "gt_bbox": [800, 600], "input_text": "", "image_size": [1920, 1080], "ui_type": "agentnetbench"}),
-        # 12. right_click - coordinate match
-        json.dumps({"action": "right_click", "gt_bbox": [800, 600], "input_text": "", "image_size": [1920, 1080], "ui_type": "agentnetbench"}),
-        # 13. double_click - coordinate match
-        json.dumps({"action": "double_click", "gt_bbox": [800, 600], "input_text": "", "image_size": [1920, 1080], "ui_type": "agentnetbench"}),
-        # 14. key - keys match
-        json.dumps({"action": "key", "gt_bbox": [-1, -1], "input_text": "Return", "image_size": [1920, 1080], "ui_type": "agentnetbench"}),
-        # 15. scroll - always passes
-        json.dumps({"action": "scroll", "gt_bbox": [-1, -1], "input_text": "", "image_size": [1920, 1080], "ui_type": "agentnetbench"}),
-        # 16. left_click_drag - coordinate match
-        json.dumps({"action": "left_click_drag", "gt_bbox": [100, 100], "input_text": "", "image_size": [1920, 1080], "ui_type": "agentnetbench"}),
+    # Run tests
+    passed = 0
+    failed = 0
+
+    for i, test in enumerate(test_cases, 1):
+        print(f"\nTest {i}: {test['name']}")
+        print("-" * 80)
+
+        format_score = r1gui_format_reward(test['predict'], test['ground_truth'])
+        accuracy_score = r1gui_accuracy_reward(test['predict'], test['ground_truth'])
+
+        print(f"Predicted: {test['predict'][:100]}...")
+        print(f"Format Score: {format_score:.2f} (Expected: {test['expected_format']:.2f})")
+        print(f"Accuracy Score: {accuracy_score:.2f}", end="")
+        if test['expected_accuracy'] is not None:
+            print(f" (Expected: {test['expected_accuracy']:.2f})")
+        else:
+            print(" (N/A - format check failed)")
+
+        # Check if test passed
+        format_pass = abs(format_score - test['expected_format']) < 0.01
+        if test['expected_accuracy'] is not None:
+            accuracy_pass = abs(accuracy_score - test['expected_accuracy']) < 0.01
+        else:
+            accuracy_pass = True  # Skip accuracy check if expected is None
+
+        if format_pass and accuracy_pass:
+            print("✓ PASSED")
+            passed += 1
+        else:
+            print("✗ FAILED")
+            if not format_pass:
+                print(f"  Format mismatch: got {format_score:.2f}, expected {test['expected_format']:.2f}")
+            if not accuracy_pass and test['expected_accuracy'] is not None:
+                print(f"  Accuracy mismatch: got {accuracy_score:.2f}, expected {test['expected_accuracy']:.2f}")
+            failed += 1
+
+    # Test batch compute_score function
+    print("\n" + "=" * 80)
+    print("Testing Batch compute_score Function")
+    print("=" * 80)
+
+    batch_input = [
+        {
+            "response": 'Thought: Click the button.\nAction: Perform click.\n<tool_call>\n{"name": "mobile_use", "arguments": {"action": "click", "coordinate": [500, 300]}}\n</tool_call>',
+            "ground_truth": json.dumps({
+                "action": "click",
+                "gt_bbox": [400, 200, 600, 400],
+                "input_text": "",
+                "ui_type": "android_control"
+            })
+        },
+        {
+            "response": 'Thought: Type text.\nAction: Input text.\n<tool_call>\n{"name": "mobile_use", "arguments": {"action": "type", "text": "test"}}\n</tool_call>',
+            "ground_truth": json.dumps({
+                "action": "type",
+                "gt_bbox": [],
+                "input_text": "test",
+                "ui_type": "android_control"
+            })
+        }
     ]
 
-    print("Testing all action types...")
-    scores = compute_score(pr, gt)
+    batch_scores = compute_score(batch_input, format_weight=0.5)
+    print(f"\nBatch scores computed for {len(batch_scores)} samples:")
+    for i, score in enumerate(batch_scores, 1):
+        print(f"Sample {i}: Overall={score['overall']:.2f}, Format={score['format']:.2f}, "
+              f"Accuracy={score['accuracy']:.2f}, Pass@Accuracy={score.get('pass_at_accuracy', 0):.2f}")
 
-    # Print results for each test case
-    action_types = [
-        "click (with thinking)", "click (no thinking)", "long_press", "swipe",
-        "type", "system_button", "open", "wait", "terminate", "mouse_move",
-        "left_click", "right_click", "double_click", "key", "scroll", "left_click_drag"
-    ]
-
-    print("\n" + "="*80)
-    print("Test Results Summary:")
-    print("="*80)
-    all_passed = True
-    for i, (action_name, score) in enumerate(zip(action_types, scores)):
-        status = "✓ PASS" if score['format'] == 1.0 and score['accuracy'] == 1.0 else "✗ FAIL"
-        if score['format'] != 1.0 or score['accuracy'] != 1.0:
-            all_passed = False
-        print(f"{i+1:2d}. {action_name:25s} | Format: {score['format']:.1f} | Accuracy: {score['accuracy']:.1f} | {status}")
-
-    print("="*80)
-    if all_passed:
-        print("✓ All tests PASSED!")
-    else:
-        print("✗ Some tests FAILED!")
-    print("="*80)
+    # Summary
+    print("\n" + "=" * 80)
+    print(f"Test Summary: {passed} passed, {failed} failed out of {passed + failed} tests")
+    print("=" * 80)

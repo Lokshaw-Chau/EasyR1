@@ -33,157 +33,17 @@ from . import torch_functional as VF
 
 
 ORIGINAL_SYS_PROMPT = (
-    "You are a helpful assistant.\n\n"
-    "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n"
-    "<tools>\n{{"
-        "\"type\": \"function\", "
-        "\"function\": {{"
-            "\"name_for_human\": \"mobile_use\", "
-            "\"name\": \"mobile_use\", "
-            "\"description\": \"Use a touchscreen to interact with a mobile device, and take screenshots.\\n" 
-                "* This is an interface to a mobile device with touchscreen. You can perform actions like clicking, typing, swiping, etc.\\n" 
-                "* Some applications may take time to start or process actions, so you may need to wait and take successive screenshots to see the results of your actions.\\n" 
-                "* The screen's resolution is {display_width_px}x{display_height_px}.\\n" 
-                "* Make sure to click any buttons, links, icons, etc with the cursor tip in the center of the element. Don't click boxes on their edges unless asked.\", "
-            "\"parameters\": {{"
-                "\"properties\": {{"
-                    "\"action\": {{"
-                        "\"description\": \"The action to perform. The available actions are:\\n" 
-                        "* `key`: Perform a key event on the mobile device.\\n    - This supports adb's `keyevent` syntax.\\n    - Examples: \\\"volume_up\\\", \\\"volume_down\\\", \\\"power\\\", \\\"camera\\\", \\\"clear\\\".\\n" 
-                        "* `click`: Click the point on the screen with coordinate (x, y).\\n"
-                        "* `long_press`: Press the point on the screen with coordinate (x, y) for specified seconds.\\n"
-                        "* `swipe`: Swipe from the starting point with coordinate (x, y) to the end point with coordinates2 (x2, y2).\\n"
-                        "* `type`: Input the specified text into the activated input box.\\n"
-                        "* `answer`: Output the answer.\\n* `system_button`: Press the system button.\\n"
-                        "* `open`: Open an app on the device.\\n"
-                        "* `wait`: Wait specified seconds for the change to happen.\\n"
-                        "* `terminate`: Terminate the current task and report its completion status.\", "
-                        "\"enum\": [\"key\", \"click\", \"long_press\", \"swipe\", \"type\", \"answer\", \"system_button\", \"open\", \"wait\", \"terminate\"], \"type\": \"string\"}}, "
-                    "\"coordinate\": {{\"description\": \"(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates to move the mouse to. Required only by `action=click`, `action=long_press`, and `action=swipe`.\", \"type\": \"array\"}}, "
-                    "\"coordinate2\": {{\"description\": \"(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates to move the mouse to. Required only by `action=swipe`.\", \"type\": \"array\"}}, "
-                    "\"text\": {{\"description\": \"Required only by `action=key`, `action=type`, `action=answer`, and `action=open`.\", \"type\": \"string\"}}, "
-                    "\"time\": {{\"description\": \"The seconds to wait. Required only by `action=long_press` and `action=wait`.\", \"type\": \"number\"}}, "
-                    "\"button\": {{\"description\": \"Back means returning to the previous interface, Home means returning to the desktop, Menu means opening the application background menu, and Enter means pressing the enter. Required only by `action=system_button`\", \"enum\": [\"Back\", \"Home\", \"Menu\", \"Enter\"], \"type\": \"string\"}}, "
-                    "\"status\": {{\"description\": \"The status of the task. Required only by `action=terminate`.\", \"type\": \"string\", \"enum\": [\"success\", \"failure\"]}}}}, "
-                "\"required\": [\"action\"], """
-                "\"type\": \"object\"}}, "
-            "\"args_format\": \"Format the arguments as a JSON object.\"}}"
-    "}}\n</tools>\n\n"
-    "For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{{\"name\": <function-name>, \"arguments\": <args-json-object>}}\n</tool_call>"
-)
-
-AC_SYS_PROMPT = (
-    "You are a helpful assistant.\n\n"
-    "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n"
-    "<tools>\n{{"
-        "\"type\": \"function\", "
-        "\"function\": {{"
-            "\"name_for_human\": \"mobile_use\", "
-            "\"name\": \"mobile_use\", "
-            "\"description\": \"Use a touchscreen to interact with a mobile device, and take screenshots.\\n" 
-                "* This is an interface to a mobile device with touchscreen. You can perform actions like clicking, typing, swiping, etc.\\n" 
-                "* Some applications may take time to start or process actions, so you may need to wait and take successive screenshots to see the results of your actions.\\n" 
-                "* The screen's resolution is {display_width_px}x{display_height_px}.\\n" 
-                "* Make sure to click any buttons, links, icons, etc with the cursor tip in the center of the element. Don't click boxes on their edges unless asked.\", "
-            "\"parameters\": {{"
-                "\"properties\": {{"
-                    "\"action\": {{"
-                        "\"description\": \"The action to perform. The available actions are:\\n" 
-                        "* `click`: Click the point on the screen with coordinate (x, y).\\n"
-                        "* `long_press`: Press the point on the screen with coordinate (x, y) for specified seconds.\\n"
-                        "* `swipe`: Swipe from the starting point with coordinate (x, y) to the end point with coordinates2 (x2, y2).\\n"
-                        "* `type`: Input the specified text into the activated input box.\\n"
-                        "* `system_button`: Press the system button.\\n"
-                        "* `open`: Open an app on the device.\\n"
-                        "* `wait`: Wait specified seconds for the change to happen.\","
-                        "\"enum\": [\"click\", \"long_press\", \"swipe\", \"type\", \"system_button\", \"open\", \"wait\"], \"type\": \"string\"}}, "
-                    "\"coordinate\": {{\"description\": \"(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates to move the mouse to. Required only by `action=click`, `action=long_press`, and `action=swipe`.\", \"type\": \"array\"}}, "
-                    "\"coordinate2\": {{\"description\": \"(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates to move the mouse to. Required only by `action=swipe`.\", \"type\": \"array\"}}, "
-                    "\"text\": {{\"description\": \"Required only by `action=type` and `action=open`.\", \"type\": \"string\"}}, "
-                    "\"time\": {{\"description\": \"The seconds to wait. Required only by `action=long_press` and `action=wait`.\", \"type\": \"number\"}}, "
-                    "\"button\": {{\"description\": \"Back means returning to the previous interface, Home means returning to the desktop, Menu means opening the application background menu, and Enter means pressing the enter. Required only by `action=system_button`.\", \"enum\": [\"Back\"], \"type\": \"string\"}}}}, "
-                "\"required\": [\"action\"], "
-                "\"type\": \"object\"}}, "
-            "\"args_format\": \"Format the arguments as a JSON object.\"}}"
-    "}}\n</tools>\n\n"
-    "For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{{\"name\": <function-name>, \"arguments\": <args-json-object>}}\n</tool_call>"
-)
-
-ODYSSEY_SYS_PROMPT = (
-    "You are a helpful assistant.\n\n"
-    "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n"
-    "<tools>\n{{"
-        "\"type\": \"function\", "
-        "\"function\": {{"
-            "\"name_for_human\": \"mobile_use\", "
-            "\"name\": \"mobile_use\", "
-            "\"description\": \"Use a touchscreen to interact with a mobile device, and take screenshots.\\n" 
-                "* This is an interface to a mobile device with touchscreen. You can perform actions like clicking, typing, swiping, etc.\\n" 
-                "* Some applications may take time to start or process actions, so you may need to wait and take successive screenshots to see the results of your actions.\\n" 
-                "* The screen's resolution is {display_width_px}x{display_height_px}.\\n" 
-                "* Make sure to click any buttons, links, icons, etc with the cursor tip in the center of the element. Don't click boxes on their edges unless asked.\", "
-            "\"parameters\": {{"
-                "\"properties\": {{"
-                    "\"action\": {{"
-                        "\"description\": \"The action to perform. The available actions are:\\n" 
-                        "* `click`: Click the point on the screen with coordinate (x, y).\\n"
-                        "* `long_press`: Press the point on the screen with coordinate (x, y) for specified seconds.\\n"
-                        "* `swipe`: Swipe from the starting point with coordinate (x, y) to the end point with coordinates2 (x2, y2).\\n"
-                        "* `type`: Input the specified text into the activated input box.\\n"
-                        "* `system_button`: Press the system button.\\n"
-                        "* `terminate`: Terminate the current task and report its completion status.\", "
-                        "\"enum\": [\"click\", \"long_press\", \"swipe\", \"type\", \"system_button\", \"terminate\"], \"type\": \"string\"}}, "
-                    "\"coordinate\": {{\"description\": \"(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates to move the mouse to. Required only by `action=click`, `action=long_press`, and `action=swipe`.\", \"type\": \"array\"}}, "
-                    "\"coordinate2\": {{\"description\": \"(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates to move the mouse to. Required only by `action=swipe`.\", \"type\": \"array\"}}, "
-                    "\"text\": {{\"description\": \"Required only by `action=type`.\", \"type\": \"string\"}}, "
-                    "\"button\": {{\"description\": \"Back means returning to the previous interface, Home means returning to the desktop, Menu means opening the application background menu, and Enter means pressing the enter. Required only by `action=system_button`\", \"enum\": [\"Back\", \"Home\", \"Menu\"], \"type\": \"string\"}}, "
-                    "\"status\": {{\"description\": \"The status of the task. Required only by `action=terminate`.\", \"type\": \"string\", \"enum\": [\"success\", \"failure\"]}}}}, "
-                "\"required\": [\"action\"], "
-                "\"type\": \"object\"}}, "
-            "\"args_format\": \"Format the arguments as a JSON object.\"}}"
-    "}}\n</tools>\n\n"
-    "For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{{\"name\": <function-name>, \"arguments\": <args-json-object>}}\n</tool_call>"
-)
-
-WEB_SYS_PROMPT = (
-    "You are a helpful assistant.\n\n"
-    "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n" 
-    "<tools>\n{{" 
-        "\"type\": \"function\", " 
-        "\"function\": {{" 
-            "\"name_for_human\": \"computer_use\", " 
-            "\"name\": \"computer_use\", " 
-            "\"description\": \"Use a mouse and keyboard to interact with a computer, and take screenshots.\\n" 
-            "* This is an interface to a desktop GUI. You do not have access to a terminal or applications menu. You must click on desktop icons to start applications.\\n" 
-            "* Some applications may take time to start or process actions, so you may need to wait and take successive screenshots to see the results of your actions. E.g. if you click on Firefox and a window doesn't open, try wait and taking another screenshot.\\n" 
-            "* The screen's resolution is {display_width_px}x{display_height_px}.\\n" 
-            "* Whenever you intend to move the cursor to click on an element like an icon, you should consult a screenshot to determine the coordinates of the element before moving the cursor.\\n" 
-            "* If you tried clicking on a program or link but it failed to load, even after waiting, try adjusting your cursor position so that the tip of the cursor visually falls on the element that you want to click.\\n" 
-            "* Make sure to click any buttons, links, icons, etc with the cursor tip in the center of the element. Don't click boxes on their edges unless asked.\", " 
-        "\"parameters\": {{" 
-            "\"properties\": {{" 
-                "\"action\": {{" 
-                    "\"description\": \"The action to perform. The available actions are:\\n" 
-                    "* `key`: Performs key down presses on the arguments passed in order, then performs key releases in reverse order.\\n" 
-                    "* `type`: Type a string of text on the keyboard.\\n" 
-                    "* `mouse_move`: Move the cursor to a specified (x, y) pixel coordinate on the screen.\\n" 
-                    "* `left_click`: Click the left mouse button.\\n"
-                    "* `left_click_drag`: Click and drag the cursor to a specified (x, y) pixel coordinate on the screen.\\n" 
-                    "* `right_click`: Click the right mouse button.\\n" 
-                    "* `double_click`: Double-click the left mouse button.\\n" 
-                    "* `scroll`: Performs a scroll of the mouse scroll wheel.\\n" 
-                    "* `terminate`: Terminate the current task and report its completion status.\", " 
-                    "\"enum\": [\"key\", \"type\", \"mouse_move\", \"left_click\", \"left_click_drag\", \"right_click\", \"double_click\", \"scroll\", \"terminate\"], \"type\": \"string\"}}, " 
-                "\"keys\": {{\"description\": \"Required only by `action=key`.\", \"type\": \"array\"}}, " 
-                "\"text\": {{\"description\": \"Required only by `action=type`.\", \"type\": \"string\"}}, " 
-                "\"coordinate\": {{\"description\": \"(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates to move the mouse to. Required only by `action=left_click`, `action=right_click`, `action=double_click`, `action=middle_click`, `action=mouse_move` and `action=left_click_drag`.\", \"type\": \"array\"}}, " 
-                "\"pixels\": {{\"description\": \"The amount of scrolling to perform. Positive values scroll up, negative values scroll down. Required only by `action=scroll`.\", \"type\": \"number\"}}, " 
-                "\"status\": {{\"description\": \"The status of the task. Required only by `action=terminate`.\", \"type\": \"string\", \"enum\": [\"success\", \"failure\"]}}}}, " 
-            "\"required\": [\"action\"], " 
-            "\"type\": \"object\"}}, " 
-        "\"args_format\": \"Format the arguments as a JSON object.\"}}" 
-    "}}\n</tools>\n\n" 
-    "For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{{\"name\": <function-name>, \"arguments\": <args-json-object>}}\n</tool_call>"
+    "\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"mobile_use\", \"description\": \"Use a touchscreen to interact with a mobile device, and take screenshots.\\n* This is an interface to a mobile device with touchscreen. You can perform actions like clicking, typing, swiping, etc.\\n* Some applications may take time to start or process actions, so you may need to wait and take successive screenshots to see the results of your actions.\\n* The screen's resolution is 999x999.\\n* Make sure to click any buttons, links, icons, etc with the cursor tip in the center of the element. Don't click boxes on their edges unless asked.\", \"parameters\": {\"properties\": {\"action\": {\"description\": \"The action to perform. The available actions are:\\n* `click`: Click the point on the screen with coordinate (x, y).\\n* `long_press`: Press the point on the screen with coordinate (x, y) for specified seconds.\\n* `swipe`: Swipe from the starting point with coordinate (x, y) to the end point with coordinates2 (x2, y2).\\n* `type`: Input the specified text into the activated input box.\\n* `answer`: Output the answer.\\n* `system_button`: Press the system button.\\n* `wait`: Wait specified seconds for the change to happen.\\n* `terminate`: Terminate the current task and report its completion status.\", \"enum\": [\"click\", \"long_press\", \"swipe\", \"type\", \"answer\", \"system_button\", \"wait\", \"terminate\"], \"type\": \"string\"}, \"coordinate\": {\"description\": \"(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates to move the mouse to. Required only by `action=click`, `action=long_press`, and `action=swipe`.\", \"type\": \"array\"}, \"coordinate2\": {\"description\": \"(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates to move the mouse to. Required only by `action=swipe`.\", \"type\": \"array\"}, \"text\": {\"description\": \"Required only by `action=type` and `action=answer`.\", \"type\": \"string\"}, \"time\": {\"description\": \"The seconds to wait. Required only by `action=long_press` and `action=wait`.\", \"type\": \"number\"}, \"button\": {\"description\": \"Back means returning to the previous interface, Home means returning to the desktop, Menu means opening the application background menu, and Enter means pressing the enter. Required only by `action=system_button`\", \"enum\": [\"Back\", \"Home\", \"Menu\", \"Enter\"], \"type\": \"string\"}, \"status\": {\"description\": \"The status of the task. Required only by `action=terminate`.\", \"type\": \"string\", \"enum\": [\"success\", \"failure\"]}}, \"required\": [\"action\"], \"type\": \"object\"}}}\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call>\n\n"
+    "# Response format\n\n"
+    "Response format for every step:\n"
+    "1) Thought: one concise sentence explaining the next move (no multi-step reasoning).\n"
+    "2) Action: a short imperative describing what to do in the UI.\n"
+    "3) A single <tool_call>...</tool_call> block containing only the JSON: {\"name\": <function-name>, \"arguments\": <args-json-object>}.\n\n"
+    "Rules:\n"
+    "- Output exactly in the order: Thought, Action, <tool_call>.\n"
+    "- Be brief: one sentence for Thought, one for Action.\n"
+    "- Do not output anything else outside those three parts.\n"
+    "- If finishing, use action=terminate in the tool call."
 )
 
 def collate_fn(features: list[dict[str, Any]]) -> dict[str, Any]:
@@ -300,51 +160,52 @@ class RLHFDataset(Dataset):
 
         # prompt_str: str = row_dict[self.prompt_key]
         text=row_dict['instruction']
-        ui_type = row_dict['ui_type']
+        # ui_type = row_dict['ui_type']
         history=row_dict['history']
         # task_type=row_dict['task_type']
         row_dict.pop('verify_bbox', None)
         row_dict.pop('success_rate', None)
         row_dict.pop('scale', None)
-        images=[row_dict['image']]
-
+        images=[row_dict.pop('image')]
         images=[process_image(image, self.min_pixels, self.max_pixels) for image in images]
 
-        if ui_type == 'gui_odyssey':
-            system_message = ODYSSEY_SYS_PROMPT.format(
-                display_width_px=images[0].width, display_height_px=images[0].height
-            )
-            prompt_str = (
-                "You may conduct step-by-step reasoning to help you better solve the problem before the <tool_call></tool_call> XML tags."
-                "The thinking process MUST be surrounded <thinking></thinking> tags as follows:\n"
-                "<thinking> ... </thinking> <tool_call>{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"...\", ...}}</tool_call>\n"
-                f"<image>\nThe user query: {text}\n"
-                f"Task progress (You have done the following operation on the current device): {history}\n"
-            )
-        elif ui_type == 'android_control':
-            system_message = AC_SYS_PROMPT.format(
-                display_width_px=images[0].width, display_height_px=images[0].height
-            )
-            prompt_str = (
-                "You may conduct step-by-step reasoning to help you better solve the problem before the <tool_call></tool_call> XML tags."
-                "The thinking process MUST be surrounded <thinking></thinking> tags as follows:\n"
-                "<thinking> ... </thinking> <tool_call>{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"...\", ...}}</tool_call>\n"
-                f"<image>\nThe user query: {text}\n"
-                f"Task progress (You have done the following operation on the current device): {history}\n"
-            )
-        elif ui_type == 'agentnetbench':
-            system_message = WEB_SYS_PROMPT.format(
-                display_width_px=images[0].width, display_height_px=images[0].height
-            )
-            prompt_str = (
-                "You may conduct step-by-step reasoning to help you better solve the problem before the <tool_call></tool_call> XML tags."
-                "The thinking process MUST be surrounded <thinking></thinking> tags as follows:\n"
-                "<thinking> ... </thinking> <tool_call>{\"name\": \"computer_use\", \"arguments\": {\"action\": \"...\", ...}}</tool_call>\n"
-                f"<image>\nThe user query: {text}\n"
-                f"Task progress (You have done the following operation on the current device): {history}\n"
-            )
-        else:
-            print(f"[Warning] Unknown ui_type: {ui_type}, use the original system prompt as default.")
+         #if ui_type == 'gui_odyssey':
+        system_message = ORIGINAL_SYS_PROMPT
+        prompt_str = (
+            f"The user query: {text}\n"
+            f"Task progress (You have done the following operation on the current device): {history}\n<image>"
+        )
+        # elif ui_type == 'android_control':
+        #     system_message = AC_SYS_PROMPT.format(
+        #         display_width_px=images[0].width, display_height_px=images[0].height
+        #     )
+        #     prompt_str = (
+        #         "You may conduct step-by-step reasoning to help you better solve the problem before the <tool_call></tool_call> XML tags."
+        #         "The thinking process MUST be surrounded <thinking></thinking> tags as follows:\n"
+        #         "<thinking> ... </thinking> <tool_call>{\"name\": \"mobile_use\", \"arguments\": {\"action\": \"...\", ...}}</tool_call>\n"
+        #         f"<image>\nThe user query: {text}\n"
+        #         f"Task progress (You have done the following operation on the current device): {history}\n"
+        #     )
+        # elif ui_type == 'agentnetbench':
+        #     system_message = WEB_SYS_PROMPT.format(
+        #         display_width_px=images[0].width, display_height_px=images[0].height
+        #     )
+        #     prompt_str = (
+        #         "You may conduct step-by-step reasoning to help you better solve the problem before the <tool_call></tool_call> XML tags."
+        #         "The thinking process MUST be surrounded <thinking></thinking> tags as follows:\n"
+        #         "<thinking> ... </thinking> <tool_call>{\"name\": \"computer_use\", \"arguments\": {\"action\": \"...\", ...}}</tool_call>\n"
+        #         f"<image>\nThe user query: {text}\n"
+        #         f"Task progress (You have done the following operation on the current device): {history}\n"
+        #     )
+        # else:
+        #     print(f"[Warning] Unknown ui_type: {ui_type}, use the original system prompt as default.")
+        content_list = []
+        for i, content in enumerate(prompt_str.split("<image>")):
+            if i != 0:
+                content_list.append({"type": "image"})
+
+            if content:
+                content_list.append({"type": "text", "text": content})
         
         messages = [
             {
@@ -353,30 +214,30 @@ class RLHFDataset(Dataset):
             },
             {
                 "role": "user", 
-                "content": prompt_str
+                "content": content_list
             },
         ]
-        scalex,scaley=images[0].size
+        # scalex,scaley=images[0].size
         gt_bbox=row_dict['gt_bbox']
-        gt_bbox[0]*=scalex
-        gt_bbox[1]*=scaley
-        if len(gt_bbox)>2:
-            gt_bbox[2]*=scalex
-            gt_bbox[3]*=scaley
+        # gt_bbox[0]*=scalex
+        # gt_bbox[1]*=scaley
+        # if len(gt_bbox)>2:
+        #     gt_bbox[2]*=scalex
+        #     gt_bbox[3]*=scaley
 
-        gt={'action': row_dict['gt_action'],'gt_bbox': gt_bbox,'input_text': row_dict['gt_input_text'], 'image_size': [scalex,scaley], 'ui_type': ui_type}
+        gt={'action': row_dict['gt_action'], 'gt_bbox': gt_bbox, 'input_text': row_dict['gt_input_text']}# , 'ui_type': ui_type}
         # gt={'gt_bbox': gt_bbox}
         # if self.system_prompt:
         #     messages.insert(0, {"role": "system", "content": self.system_prompt})
 
-        prompt = self.tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+        prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
 
         # if self.image_key in row_dict:
-        prompt = prompt.replace("<image>", "<|vision_start|><|image_pad|><|vision_end|>")
+        # prompt = prompt.replace("<image>", "<|vision_start|><|image_pad|><|vision_end|>")
         row_dict["multi_modal_data"] = {
             "image": images
         }
-        model_inputs = self.processor(row_dict["multi_modal_data"]["image"], prompt, return_tensors="pt")
+        model_inputs = self.processor(row_dict["multi_modal_data"]["image"], [prompt], add_special_tokens=False, return_tensors="pt")
         input_ids = model_inputs.pop("input_ids")[0]
         attention_mask = model_inputs.pop("attention_mask")[0]
         row_dict["multi_modal_inputs"] = dict(model_inputs)

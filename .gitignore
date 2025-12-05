@@ -187,3 +187,6 @@ images*
 _*.sh
 _*.sh
 _*.yaml
+_*.json
+*.ipynb
+.png
