@@ -192,3 +192,6 @@ data
 data2
 
 validation/**/*.json
+_*.json
+*.ipynb
+.png

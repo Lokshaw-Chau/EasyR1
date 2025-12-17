@@ -263,7 +263,7 @@ class vLLMRollout(BaseRollout):
                     sampling_params_nothinking.max_tokens = self.sampling_params.max_tokens - 1
                     vllm_inputs_nothinking = deepcopy(vllm_inputs)
                     for ipt in vllm_inputs_nothinking:
-                        ipt['prompt_token_ids'] = ipt['prompt_token_ids'] + [2512]  # <tool_call> token id
+                        ipt['prompt_token_ids'] = ipt['prompt_token_ids'] + [151657]  # <tool_call> token id
                     completions_nothinking = self.inference_engine.generate(
                         prompts=vllm_inputs_nothinking,
                         sampling_params=sampling_params_nothinking,
@@ -279,7 +279,7 @@ class vLLMRollout(BaseRollout):
                     sampling_params_thinking.max_tokens = self.sampling_params.max_tokens - 1
                     vllm_inputs_thinking = deepcopy(vllm_inputs)
                     for ipt in vllm_inputs_thinking:
-                        ipt['prompt_token_ids'] = ipt['prompt_token_ids'] + [84169]  # <thinking> token id
+                        ipt['prompt_token_ids'] = ipt['prompt_token_ids'] + [13708]  # <thinking> token id
                     completions_thinking = self.inference_engine.generate(
                         prompts=vllm_inputs_thinking,
                         sampling_params=sampling_params_thinking,
@@ -299,10 +299,10 @@ class vLLMRollout(BaseRollout):
                     if completion_nointervention != [] and completion_nothinking != []:
                         no_think_ratio = (
                             len(completion_nothinking.outputs) +
-                            len([s for s in completion_nointervention.outputs if s.token_ids[0] == 2512])
+                            len([s for s in completion_nointervention.outputs if s.token_ids[0] == 151657])
                         ) / self.sampling_params.n
                     elif completion_nointervention != [] and completion_nothinking == []:
-                        no_think_ratio = len([s for s in completion_nointervention.outputs if s.token_ids[0] == 2512]) / self.sampling_params.n
+                        no_think_ratio = len([s for s in completion_nointervention.outputs if s.token_ids[0] == 151657]) / self.sampling_params.n
                     elif completion_nointervention == [] and completion_nothinking != []:
                         no_think_ratio = len(completion_nothinking.outputs) / self.sampling_params.n
                     else:
@@ -312,20 +312,20 @@ class vLLMRollout(BaseRollout):
                     # Add thinking outputs
                     if completion_thinking != []:
                         for output in completion_thinking.outputs:
-                            response_ids.append([84169] + output.token_ids)
+                            response_ids.append([13708] + output.token_ids)
                             rollout_prob.append(think_ratio)
 
                     # Add nothinking outputs
                     if completion_nothinking != []:
                         for output in completion_nothinking.outputs:
-                            response_ids.append([2512] + output.token_ids)
+                            response_ids.append([151657] + output.token_ids)
                             rollout_prob.append(no_think_ratio)
 
                     # Add no intervention outputs
                     if completion_nointervention != []:
                         for output in completion_nointervention.outputs:
                             response_ids.append(output.token_ids)
-                            if output.token_ids[0] == 2512:
+                            if output.token_ids[0] == 151657:
                                 rollout_prob.append(no_think_ratio)
                             else:
                                 rollout_prob.append(think_ratio)
@@ -333,9 +333,9 @@ class vLLMRollout(BaseRollout):
             # Determine enforce_nothinking based on first token
             enforce_nothinking = []
             for response_id in response_ids:
-                if len(response_id) > 0 and response_id[0] == 2512:  # <tool_call>
+                if len(response_id) > 0 and response_id[0] == 151657:  # <tool_call>
                     enforce_nothinking.append(True)
-                elif len(response_id) > 0 and response_id[0] == 84169:  # <thinking>
+                elif len(response_id) > 0 and response_id[0] == 13708:  # <thinking>
                     enforce_nothinking.append(False)
                 else:
                     enforce_nothinking.append(False)
