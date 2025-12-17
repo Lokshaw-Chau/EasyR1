@@ -188,6 +188,7 @@ _*.sh
 _*.sh
 _*.yaml
 _*.ipynb
+data
 data2
 
 validation/**/*.json
